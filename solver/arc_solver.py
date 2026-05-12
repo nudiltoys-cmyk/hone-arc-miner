@@ -1,0 +1,601 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+from collections import Counter, deque
+from dataclasses import dataclass
+from itertools import combinations
+from typing import Callable, Iterable, Sequence
+
+Grid = list[list[int]]
+Example = dict[str, Grid]
+
+
+def clone(grid: Grid) -> Grid:
+    return [row[:] for row in grid]
+
+
+def shape(grid: Grid) -> tuple[int, int]:
+    return (len(grid), len(grid[0]) if grid else 0)
+
+
+def valid(grid: Grid) -> bool:
+    return bool(grid) and bool(grid[0]) and all(len(r) == len(grid[0]) for r in grid)
+
+
+def freeze(grid: Grid) -> tuple[tuple[int, ...], ...]:
+    return tuple(tuple(row) for row in grid)
+
+
+def colors(grid: Grid) -> set[int]:
+    return {v for row in grid for v in row}
+
+
+def nonzero_colors(grid: Grid) -> set[int]:
+    return colors(grid) - {0}
+
+
+def dominant_color(grid: Grid) -> int:
+    counts = Counter(v for row in grid for v in row)
+    return counts.most_common(1)[0][0] if counts else 0
+
+
+def color_counts(grid: Grid) -> Counter[int]:
+    return Counter(v for row in grid for v in row)
+
+
+def bbox(grid: Grid, background: int = 0) -> tuple[int, int, int, int] | None:
+    rows: list[int] = []
+    cols: list[int] = []
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value != background:
+                rows.append(r)
+                cols.append(c)
+    if not rows:
+        return None
+    return min(rows), max(rows), min(cols), max(cols)
+
+
+def crop_bbox(grid: Grid, background: int = 0) -> Grid:
+    box = bbox(grid, background)
+    if box is None:
+        return clone(grid)
+    r0, r1, c0, c1 = box
+    return [row[c0 : c1 + 1] for row in grid[r0 : r1 + 1]]
+
+
+def rotate90(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
+
+
+def rotate180(grid: Grid) -> Grid:
+    return [row[::-1] for row in grid[::-1]]
+
+
+def rotate270(grid: Grid) -> Grid:
+    return rotate90(rotate180(grid))
+
+
+def flip_h(grid: Grid) -> Grid:
+    return [row[::-1] for row in grid]
+
+
+def flip_v(grid: Grid) -> Grid:
+    return grid[::-1]
+
+
+def transpose(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    return [[grid[r][c] for r in range(h)] for c in range(w)]
+
+
+def flip_antidiagonal(grid: Grid) -> Grid:
+    return rotate90(flip_v(grid))
+
+
+def shift(grid: Grid, direction: str, amount: int) -> Grid:
+    h, w = shape(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    if direction == "up" and amount < h:
+        for r in range(amount, h):
+            out[r - amount] = grid[r][:]
+    elif direction == "down" and amount < h:
+        for r in range(h - amount):
+            out[r + amount] = grid[r][:]
+    elif direction == "left" and amount < w:
+        for r in range(h):
+            out[r][: w - amount] = grid[r][amount:]
+    elif direction == "right" and amount < w:
+        for r in range(h):
+            out[r][amount:] = grid[r][: w - amount]
+    return out
+
+
+def recenter(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    box = bbox(grid)
+    if box is None:
+        return clone(grid)
+    r0, r1, c0, c1 = box
+    ch, cw = r1 - r0 + 1, c1 - c0 + 1
+    sr = (h - ch) // 2
+    sc = (w - cw) // 2
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for r in range(ch):
+        for c in range(cw):
+            out[sr + r][sc + c] = grid[r0 + r][c0 + c]
+    return out
+
+
+def zoom(grid: Grid, factor: int) -> Grid:
+    h, w = shape(grid)
+    out = [[0 for _ in range(w * factor)] for _ in range(h * factor)]
+    for r in range(h):
+        for c in range(w):
+            for dr in range(factor):
+                for dc in range(factor):
+                    out[r * factor + dr][c * factor + dc] = grid[r][c]
+    return out
+
+
+def downsample2(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 2 or w < 2:
+        return clone(grid)
+    return [[grid[r * 2][c * 2] for c in range(w // 2)] for r in range(h // 2)]
+
+
+def gravity(grid: Grid, direction: str) -> Grid:
+    h, w = shape(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    if direction in {"down", "up"}:
+        for c in range(w):
+            vals = [grid[r][c] for r in range(h) if grid[r][c] != 0]
+            if direction == "down":
+                start = h - len(vals)
+                for i, v in enumerate(vals):
+                    out[start + i][c] = v
+            else:
+                for i, v in enumerate(vals):
+                    out[i][c] = v
+    else:
+        for r in range(h):
+            vals = [v for v in grid[r] if v != 0]
+            if direction == "right":
+                start = w - len(vals)
+                out[r][start:] = vals
+            else:
+                out[r][: len(vals)] = vals
+    return out
+
+
+def swap_colors(grid: Grid, a: int, b: int) -> Grid:
+    out = clone(grid)
+    for r, row in enumerate(out):
+        for c, value in enumerate(row):
+            if value == a:
+                row[c] = b
+            elif value == b:
+                row[c] = a
+    return out
+
+
+def replace_color(grid: Grid, src: int, dst: int) -> Grid:
+    return [[dst if value == src else value for value in row] for row in grid]
+
+
+def keep_color(grid: Grid, color: int, dim: int = 5) -> Grid:
+    return [[value if value in {0, color} else dim for value in row] for row in grid]
+
+
+def remove_color(grid: Grid, color: int) -> Grid:
+    return replace_color(grid, color, 0)
+
+
+def fill_rectangle_holes(grid: Grid) -> Grid:
+    """Fill rectangular frames when a train set suggests that pattern."""
+    out = clone(grid)
+    h, w = shape(grid)
+    for color in nonzero_colors(grid):
+        rows = [r for r in range(h) for c in range(w) if grid[r][c] == color]
+        cols = [c for r in range(h) for c in range(w) if grid[r][c] == color]
+        if not rows:
+            continue
+        r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+        if r1 - r0 < 2 or c1 - c0 < 2:
+            continue
+        border = True
+        for c in range(c0, c1 + 1):
+            border &= grid[r0][c] == color and grid[r1][c] == color
+        for r in range(r0, r1 + 1):
+            border &= grid[r][c0] == color and grid[r][c1] == color
+        if border:
+            for r in range(r0 + 1, r1):
+                for c in range(c0 + 1, c1):
+                    if out[r][c] == 0:
+                        out[r][c] = color
+    return out
+
+
+def draw_lines_between_same_color_points(grid: Grid, line_color: int | None = None) -> Grid:
+    out = clone(grid)
+    candidates = sorted(nonzero_colors(grid))
+    fill = line_color if line_color is not None else _least_used_free_color(grid, fallback=3)
+    for color in candidates:
+        pts = [
+            (r, c)
+            for r, row in enumerate(grid)
+            for c, value in enumerate(row)
+            if value == color
+        ]
+        for (r1, c1), (r2, c2) in combinations(pts, 2):
+            if r1 == r2:
+                for c in range(min(c1, c2) + 1, max(c1, c2)):
+                    if out[r1][c] == 0:
+                        out[r1][c] = fill
+            elif c1 == c2:
+                for r in range(min(r1, r2) + 1, max(r1, r2)):
+                    if out[r][c1] == 0:
+                        out[r][c1] = fill
+    return out
+
+
+def _least_used_free_color(grid: Grid, fallback: int = 3) -> int:
+    used = colors(grid)
+    for c in (3, 2, 4, 1, 6, 7, 8, 9, 5):
+        if c not in used:
+            return c
+    return fallback
+
+
+@dataclass(frozen=True)
+class Op:
+    name: str
+    func: Callable[[Grid], Grid]
+
+
+def primitive_ops(examples: Sequence[Example]) -> list[Op]:
+    palette = set(range(10))
+    for ex in examples:
+        palette |= colors(ex["input"]) | colors(ex["output"])
+    palette = {c for c in palette if 0 <= c <= 9}
+
+    ops: list[Op] = [
+        Op("id", clone),
+        Op("rot90", rotate90),
+        Op("rot180", rotate180),
+        Op("rot270", rotate270),
+        Op("flip_h", flip_h),
+        Op("flip_v", flip_v),
+        Op("transpose", transpose),
+        Op("anti_diag", flip_antidiagonal),
+        Op("recenter", recenter),
+        Op("zoom2", lambda g: zoom(g, 2)),
+        Op("zoom3", lambda g: zoom(g, 3)),
+        Op("downsample2", downsample2),
+        Op("grav_down", lambda g: gravity(g, "down")),
+        Op("grav_up", lambda g: gravity(g, "up")),
+        Op("grav_left", lambda g: gravity(g, "left")),
+        Op("grav_right", lambda g: gravity(g, "right")),
+        Op("crop", crop_bbox),
+        Op("fill_rect", fill_rectangle_holes),
+        Op("connect_lines", draw_lines_between_same_color_points),
+    ]
+    for direction in ("up", "down", "left", "right"):
+        for amount in (1, 2, 3):
+            ops.append(Op(f"shift_{direction}_{amount}", lambda g, d=direction, a=amount: shift(g, d, a)))
+    for a, b in combinations(sorted(palette), 2):
+        if a == b:
+            continue
+        ops.append(Op(f"swap_{a}_{b}", lambda g, x=a, y=b: swap_colors(g, x, y)))
+    for c in sorted(palette):
+        ops.append(Op(f"remove_{c}", lambda g, x=c: remove_color(g, x)))
+        ops.append(Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x)))
+    return ops
+
+
+def learn_color_mapping(examples: Sequence[Example]) -> dict[int, int] | None:
+    mapping: dict[int, int] = {}
+    for ex in examples:
+        inp, out = ex["input"], ex["output"]
+        if shape(inp) != shape(out):
+            return None
+        for r, row in enumerate(inp):
+            for c, value in enumerate(row):
+                target = out[r][c]
+                if value in mapping and mapping[value] != target:
+                    return None
+                mapping[value] = target
+    return mapping if mapping else None
+
+
+def apply_mapping(grid: Grid, mapping: dict[int, int]) -> Grid:
+    return [[mapping.get(value, value) for value in row] for row in grid]
+
+
+def learn_patch_overlay(examples: Sequence[Example]) -> list[tuple[int, int, int]] | None:
+    """Learn constant cell edits shared across examples of the same shape."""
+    shapes = {shape(ex["input"]) for ex in examples} | {shape(ex["output"]) for ex in examples}
+    if len(shapes) != 1:
+        return None
+    h, w = next(iter(shapes))
+    edits: list[tuple[int, int, int]] = []
+    for r in range(h):
+        for c in range(w):
+            vals = {ex["output"][r][c] for ex in examples}
+            same_input = {ex["input"][r][c] for ex in examples}
+            if len(vals) == 1 and vals != same_input:
+                edits.append((r, c, next(iter(vals))))
+    return edits or None
+
+
+def apply_patch_overlay(grid: Grid, edits: list[tuple[int, int, int]]) -> Grid:
+    out = clone(grid)
+    h, w = shape(out)
+    for r, c, value in edits:
+        if r < h and c < w:
+            out[r][c] = value
+    return out
+
+
+class ARCSolver:
+    def __init__(self) -> None:
+        self.max_search_depth = int(os.getenv("ARC_MAX_SEARCH_DEPTH", "3"))
+        self.max_states_per_depth = int(os.getenv("ARC_MAX_STATES_PER_DEPTH", "1200"))
+        self.vllm_client = None
+        self.vllm_model_name: str | None = None
+        self.vllm_attempts = int(os.getenv("VLLM_ATTEMPTS", "1"))
+        self._init_vllm()
+
+    def solve(self, train_examples: list[Example], test_input: Grid, task_hash: str | None = None) -> Grid:
+        if not train_examples or not valid(test_input):
+            return test_input
+
+        candidates: list[Grid] = []
+
+        exact = self._try_solver(self._solve_by_exact_program, train_examples, test_input)
+        if exact is not None:
+            return exact
+
+        weak_solvers = (
+            self._solve_by_color_mapping,
+            self._solve_by_patch_overlay,
+            self._solve_by_shape_specialist,
+        )
+        for learned in weak_solvers:
+            try:
+                out = learned(train_examples, test_input)
+                if out is not None and valid(out):
+                    candidates.append(out)
+            except Exception:
+                continue
+
+        vllm_out = self._solve_by_vllm(train_examples, test_input, task_hash=task_hash)
+        if vllm_out is not None and valid(vllm_out):
+            return vllm_out
+
+        if candidates:
+            return self._choose_candidate(candidates, train_examples, test_input)
+
+        return self._fallback(train_examples, test_input)
+
+    def _try_solver(
+        self,
+        solver: Callable[[list[Example], Grid], Grid | None],
+        examples: list[Example],
+        test_input: Grid,
+    ) -> Grid | None:
+        try:
+            out = solver(examples, test_input)
+            if out is not None and valid(out):
+                return out
+        except Exception:
+            return None
+        return None
+
+    def _init_vllm(self) -> None:
+        api_base = os.getenv("VLLM_API_BASE")
+        if not api_base:
+            return
+        try:
+            from openai import OpenAI
+
+            self.vllm_client = OpenAI(base_url=f"{api_base.rstrip('/')}/v1", api_key="dummy")
+            models = self.vllm_client.models.list()
+            if models.data:
+                self.vllm_model_name = models.data[0].id
+                print(f"vLLM ready: {self.vllm_model_name}")
+        except Exception as exc:
+            print(f"vLLM unavailable, using deterministic solver only: {exc}")
+            self.vllm_client = None
+            self.vllm_model_name = None
+
+    def _solve_by_exact_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        outputs = tuple(freeze(ex["output"]) for ex in examples)
+        starts = tuple(freeze(ex["input"]) for ex in examples)
+        test_start = freeze(test_input)
+        ops = primitive_ops(examples)
+
+        queue = deque([(starts, test_start, [])])
+        seen = {starts}
+        best_depth_states = 0
+
+        while queue:
+            train_states, test_state, program = queue.popleft()
+            if train_states == outputs:
+                return [list(row) for row in test_state]
+            if len(program) >= self.max_search_depth:
+                continue
+
+            depth_count = 0
+            for op in ops:
+                try:
+                    next_train = tuple(freeze(op.func([list(row) for row in state])) for state in train_states)
+                    if next_train in seen:
+                        continue
+                    seen.add(next_train)
+                    next_test = freeze(op.func([list(row) for row in test_state]))
+                except Exception:
+                    continue
+                if not all(valid([list(row) for row in state]) for state in next_train):
+                    continue
+                queue.append((next_train, next_test, program + [op.name]))
+                depth_count += 1
+                if depth_count + best_depth_states > self.max_states_per_depth:
+                    break
+            best_depth_states += depth_count
+            if best_depth_states > self.max_states_per_depth * self.max_search_depth:
+                break
+        return None
+
+    def _solve_by_color_mapping(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        mapping = learn_color_mapping(examples)
+        if not mapping:
+            return None
+        return apply_mapping(test_input, mapping)
+
+    def _solve_by_patch_overlay(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        edits = learn_patch_overlay(examples)
+        if not edits:
+            return None
+        return apply_patch_overlay(test_input, edits)
+
+    def _solve_by_shape_specialist(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        specialists: list[Callable[[Grid], Grid]] = [
+            crop_bbox,
+            fill_rectangle_holes,
+            draw_lines_between_same_color_points,
+            recenter,
+        ]
+        for fn in specialists:
+            if all(fn(ex["input"]) == ex["output"] for ex in examples):
+                return fn(test_input)
+        return None
+
+    def _solve_by_vllm(
+        self,
+        examples: list[Example],
+        test_input: Grid,
+        *,
+        task_hash: str | None = None,
+    ) -> Grid | None:
+        if not self.vllm_client or not self.vllm_model_name:
+            return None
+
+        prompt = self._build_vllm_prompt(examples, test_input, task_hash)
+        for attempt in range(max(1, self.vllm_attempts)):
+            try:
+                response = self.vllm_client.chat.completions.create(
+                    model=self.vllm_model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You solve ARC-AGI grid puzzles. Return only a JSON object "
+                                "with key predicted_output whose value is the output grid. "
+                                "The grid must be rectangular and contain integers 0 through 9."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=0.0 if attempt == 0 else 0.2,
+                    max_tokens=int(os.getenv("VLLM_MAX_TOKENS", "1800")),
+                )
+                content = response.choices[0].message.content or ""
+                parsed = self._parse_vllm_grid(content)
+                if parsed is not None and valid(parsed):
+                    return parsed
+            except Exception as exc:
+                print(f"vLLM solve failed: {exc}")
+        return None
+
+    def _build_vllm_prompt(
+        self,
+        examples: list[Example],
+        test_input: Grid,
+        task_hash: str | None,
+    ) -> str:
+        payload = {
+            "task_hash": task_hash,
+            "training_examples": examples,
+            "test_input": test_input,
+        }
+        return (
+            "Infer the transformation from each training input grid to output grid, "
+            "then apply it to the test input.\n\n"
+            "Important Hone-specific clue: many tasks are generated by first solving "
+            "a base ARC-style task and then applying the same hidden chain of simple "
+            "post-processing transforms to every output. Possible post-processing "
+            "steps include rotate_180, rotate_270, transpose, diagonal flips, shifts "
+            "by 1-3, recenter, zoom_2x, zoom_3x, downsample_2x, swap_colors, "
+            "remove_color, highlight_color, and gravity in four directions.\n\n"
+            "Return exactly this JSON shape and no explanation:\n"
+            "{\"predicted_output\": [[0]]}\n\n"
+            f"Puzzle JSON:\n{json.dumps(payload, separators=(',', ':'))}"
+        )
+
+    def _parse_vllm_grid(self, content: str) -> Grid | None:
+        text = content.strip()
+        code_block = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.S)
+        if code_block:
+            text = code_block.group(1).strip()
+
+        candidates = [text]
+        object_match = re.search(r"\{.*\}", text, flags=re.S)
+        if object_match:
+            candidates.append(object_match.group(0))
+        array_match = re.search(r"\[\s*\[.*\]\s*\]", text, flags=re.S)
+        if array_match:
+            candidates.append(array_match.group(0))
+
+        for candidate in candidates:
+            try:
+                value = json.loads(candidate)
+            except Exception:
+                continue
+            if isinstance(value, dict):
+                value = value.get("predicted_output") or value.get("output") or value.get("grid")
+            if self._is_grid(value):
+                return [[int(cell) for cell in row] for row in value]
+        return None
+
+    def _is_grid(self, value: object) -> bool:
+        if not isinstance(value, list) or not value or not isinstance(value[0], list):
+            return False
+        width = len(value[0])
+        if width == 0:
+            return False
+        for row in value:
+            if not isinstance(row, list) or len(row) != width:
+                return False
+            for cell in row:
+                if not isinstance(cell, int) or cell < 0 or cell > 9:
+                    return False
+        return True
+
+    def _choose_candidate(self, candidates: list[Grid], examples: list[Example], test_input: Grid) -> Grid:
+        expected_shapes = [shape(ex["output"]) for ex in examples]
+        common_shape = Counter(expected_shapes).most_common(1)[0][0]
+
+        def score(grid: Grid) -> tuple[int, int, int]:
+            sh = shape(grid)
+            nonzero = sum(1 for row in grid for value in row if value != 0)
+            color_overlap = len(colors(grid) & set().union(*(colors(ex["output"]) for ex in examples)))
+            return (1 if sh == common_shape else 0, color_overlap, nonzero)
+
+        return max(candidates, key=score)
+
+    def _fallback(self, examples: list[Example], test_input: Grid) -> Grid:
+        out_shapes = [shape(ex["output"]) for ex in examples]
+        in_shapes = [shape(ex["input"]) for ex in examples]
+        if shape(test_input) in in_shapes and out_shapes:
+            idx = in_shapes.index(shape(test_input))
+            if idx < len(examples):
+                # Shape reuse beats returning an invalid size for many ARC tasks.
+                out_h, out_w = shape(examples[idx]["output"])
+                fill = dominant_color(examples[idx]["output"])
+                return [[fill for _ in range(out_w)] for _ in range(out_h)]
+        return clone(test_input)

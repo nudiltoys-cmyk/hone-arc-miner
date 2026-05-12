@@ -25,7 +25,7 @@ Do not register until all of these are true:
 Set these environment variables on the server:
 
 ```text
-MINER_REPO_URL=https://github.com/YOUR_USER/hone-arc-miner
+MINER_REPO_URL=https://github.com/nudiltoys-cmyk/hone-arc-miner
 MINER_REPO_BRANCH=main
 MINER_REPO_PATH=solver
 MINER_WEIGHT_CLASS=1xH200

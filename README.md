@@ -8,6 +8,7 @@ This workspace contains a low-cost Hone SN5 miner candidate.
 - `miner-server/`: tiny `/info` server to point validators at the solver repo.
 - `tools/`: local evaluation scripts.
 - `RUNBOOK.md`: launch checklist and tuning loop.
+- `notebooks/hone_colab_llm_eval.ipynb`: Colab LLM experiment for prompt/model testing.
 
 ## Strategy
 

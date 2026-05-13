@@ -10,6 +10,10 @@ Use Colab only as the research lab. Do not put wallet keys, hotkeys, seed phrase
 4. Run the notebook.
 5. Share the final exact-match, partial, grid, and elapsed numbers back here.
 
+## LLM Experiment
+
+Open `notebooks/hone_colab_llm_eval.ipynb` to test a local Hugging Face instruct model. The default is small enough for a CPU smoke test. If Colab gives a GPU, switch to `Qwen/Qwen2.5-7B-Instruct` with `LOAD_4BIT=True`.
+
 ## Decision Gate
 
 We only move to registration when one of these is true:

@@ -27,14 +27,16 @@ The solver has two layers:
 
 ## Current Baseline
 
-Local no-vLLM synthetic smoke tests compile and run, but exact-match accuracy is not yet competitive. This repo should be treated as a validator-side vLLM candidate plus an improving deterministic fallback, not a finished deterministic solver.
+Local no-vLLM synthetic smoke tests compile and run. The deterministic layer is now clearing the rough Hone exact-rate floor on the validator-style dry run, but should still be treated as an improving miner candidate rather than a finished solver.
 
 Latest local checks on 2026-05-13:
 
 - Safe default: `python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7`
-  - `exact=7/30`, `shape=0.933`, `partial=0.823`, `grid=0.719`, `elapsed=97.7s`.
+  - `exact=8/30`, `shape=0.900`, `partial=0.810`, `grid=0.712`, `elapsed=105.8s`.
 - Cross-seed smoke: `python3 tools/evaluate_local.py --n 20 --seed 11 --chain-min 3 --chain-max 7`
-  - `exact=5/20`, `shape=0.800`, `partial=0.740`, `grid=0.649`, `elapsed=73.1s`.
+  - `exact=5/20`, `shape=0.800`, `partial=0.740`, `grid=0.649`, `elapsed=73.8s`.
+- Saved validator-style dry run: `/tmp/hone_validator_dry_input`
+  - `exact=12/20`, `shape=0.850`, `partial=0.770`, `grid=0.706`.
 
 Keep these deterministic solver flags off by default unless benchmarking says otherwise:
 

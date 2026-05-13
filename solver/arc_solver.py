@@ -403,6 +403,339 @@ def complete_same_color_spans(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def punchcard_odd_holes(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if w not in {20, 30}:
+        return clone(grid)
+    out = clone(grid)
+    changed = False
+    for r in range(h - 2):
+        c = 0
+        while c < w:
+            color = grid[r][c]
+            if color == 0 or grid[r + 1][c] != color or grid[r + 2][c] != color:
+                c += 1
+                continue
+            start = c
+            while (
+                c < w
+                and grid[r][c] == color
+                and grid[r + 1][c] == color
+                and grid[r + 2][c] == color
+            ):
+                c += 1
+            width = c - start
+            if width >= 3 and width % 2 == 1:
+                for offset in range(1, width, 2):
+                    if out[r + 1][start + offset] != 0:
+                        out[r + 1][start + offset] = 0
+                        changed = True
+        if changed:
+            # Punchcards are separated vertically, so avoid reprocessing a block's lower rows.
+            continue
+    return out if changed else clone(grid)
+
+
+def box_inner_corners_to_outer_diagonals(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    candidates: list[tuple[int, int, int, int, int]] = []
+    for color in nonzero_colors(grid):
+        pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == color]
+        if len(pts) < 8:
+            continue
+        r0, r1 = min(r for r, _ in pts), max(r for r, _ in pts)
+        c0, c1 = min(c for _, c in pts), max(c for _, c in pts)
+        if r0 <= 0 or c0 <= 0 or r1 >= h - 1 or c1 >= w - 1 or r1 - r0 < 3 or c1 - c0 < 3:
+            continue
+        border = True
+        for c in range(c0, c1 + 1):
+            border &= grid[r0][c] == color and grid[r1][c] == color
+        for r in range(r0, r1 + 1):
+            border &= grid[r][c0] == color and grid[r][c1] == color
+        if border:
+            candidates.append((r0, r1, c0, c1, color))
+    if not candidates:
+        return clone(grid)
+
+    r0, r1, c0, c1, box_color = max(candidates, key=lambda item: (item[1] - item[0]) * (item[3] - item[2]))
+    inner = [
+        ((r0 + 1, c0 + 1), (r1 + 1, c1 + 1)),
+        ((r0 + 1, c1 - 1), (r1 + 1, c0 - 1)),
+        ((r1 - 1, c0 + 1), (r0 - 1, c1 + 1)),
+        ((r1 - 1, c1 - 1), (r0 - 1, c0 - 1)),
+    ]
+    out = clone(grid)
+    changed = False
+    for (sr, sc), (dr, dc) in inner:
+        value = grid[sr][sc]
+        if value not in {0, box_color}:
+            out[sr][sc] = 0
+            out[dr][dc] = value
+            changed = True
+    return out if changed else clone(grid)
+
+
+def fill_symmetric_yellow_cutouts(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 6:
+        return clone(grid)
+    out = clone(grid)
+    changed = False
+    background = 4
+    for comp in connected_components(grid, background=-1):
+        if not comp:
+            continue
+        if grid[comp[0][0]][comp[0][1]] != background:
+            continue
+        rect = _component_rect(comp)
+        if rect is None:
+            continue
+        r0, r1, c0, c1 = rect
+        if len(comp) < 4:
+            continue
+        if len(comp) >= (h * w) // 4:
+            continue
+        for r, c in comp:
+            vals = []
+            for mr, mc in ((h - 1 - r, c), (r, w - 1 - c), (h - 1 - r, w - 1 - c), (c, r)):
+                if 0 <= mr < h and 0 <= mc < w and not (r0 <= mr <= r1 and c0 <= mc <= c1):
+                    value = grid[mr][mc]
+                    if value != background:
+                        vals.append(value)
+            if vals:
+                out[r][c] = Counter(vals).most_common(1)[0][0]
+                changed = True
+    return out if changed else clone(grid)
+
+
+def replicate_quadrant_pattern(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    rows = [r for r, row in enumerate(grid) if sum(1 for value in row if value == 4) >= max(2, w // 2)]
+    cols = [c for c in range(w) if sum(1 for r in range(h) if grid[r][c] == 4) >= max(2, h // 2)]
+    if len(rows) != 1:
+        return clone(grid)
+    block_h = rows[0]
+    block_w = cols[0] if cols else w
+    if block_h <= 0 or block_w <= 0:
+        return clone(grid)
+    if h != 2 * block_h + 1:
+        return clone(grid)
+    num_cols = (w + 1) // (block_w + 1) if cols else 1
+    if num_cols < 1 or w != num_cols * block_w + num_cols - 1:
+        return clone(grid)
+
+    pattern: Grid | None = None
+    for br in range(2):
+        for bc in range(num_cols):
+            r0 = br * (block_h + 1)
+            c0 = bc * (block_w + 1)
+            block = [row[c0 : c0 + block_w] for row in grid[r0 : r0 + block_h]]
+            if any(value not in {0, 4} for row in block for value in row):
+                pattern = block
+                break
+        if pattern is not None:
+            break
+    if pattern is None:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for br in range(2):
+        for bc in range(num_cols):
+            r0 = br * (block_h + 1)
+            c0 = bc * (block_w + 1)
+            for r in range(block_h):
+                for c in range(block_w):
+                    if out[r0 + r][c0 + c] != pattern[r][c]:
+                        out[r0 + r][c0 + c] = pattern[r][c]
+                        changed = True
+    return out if changed else clone(grid)
+
+
+def cyan_zigzag_path(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 8]
+    if len(pts) != 1 or h != w or h != 13:
+        return clone(grid)
+    row, col = pts[0]
+    out = clone(grid)
+    for dr, dc in ((-1, 1), (1, -1)):
+        vertical, horizontal = 2, 0
+        r, c = row, col
+        while True:
+            if vertical:
+                r += dr
+                vertical -= 1
+                if r < 0 or r >= h:
+                    break
+                out[r][c] = 5
+                if not vertical:
+                    horizontal = 2
+            else:
+                c += dc
+                horizontal -= 1
+                if c < 0 or c >= w:
+                    break
+                out[r][c] = 5
+                if not horizontal:
+                    vertical = 2
+    return out
+
+
+def gray_towers_to_blue_bases(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h != 5:
+        return clone(grid)
+    if any(value != 5 for value in grid[h - 1]):
+        return clone(grid)
+    out = clone(grid)
+    changed = False
+    for c in range(w):
+        if grid[h - 3][c] == 1 and grid[h - 2][c] == 5 and grid[h - 1][c] == 5:
+            out[h - 3][c] = 0
+            out[h - 1][c] = 1
+            changed = True
+    return out if changed else clone(grid)
+
+
+def complete_partial_street(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h != 6:
+        return clone(grid)
+    cyan_cols = [(sum(1 for r in range(h) if grid[r][c] == 8), c) for c in range(w)]
+    red_rows = [(sum(1 for c in range(w) if grid[r][c] == 2), r) for r in range(h)]
+    cyan_count, cyan_col = max(cyan_cols)
+    red_count, red_row = max(red_rows)
+    if cyan_count < 2 or red_count < 2:
+        return clone(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for r in range(h):
+        out[r][cyan_col] = 8
+    for c in range(w):
+        out[red_row][c] = 2
+    out[red_row][cyan_col] = 4
+    return out
+
+
+def blue_flood_zero_regions(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 10 or h > 18 or len(nonzero_colors(grid)) < 5 or 1 not in colors(grid) or 0 not in colors(grid):
+        return clone(grid)
+    out = clone(grid)
+    queue = deque((r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 1)
+    changed = False
+    while queue:
+        r, c = queue.popleft()
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < h and 0 <= nc < w and out[nr][nc] == 0:
+                out[nr][nc] = 1
+                changed = True
+                queue.append((nr, nc))
+    return out if changed else clone(grid)
+
+
+def two_point_crosses(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h != 9:
+        return clone(grid)
+    cyan = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 8]
+    orange = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 7]
+    if len(cyan) != 1 or len(orange) != 1:
+        return clone(grid)
+    (cr, cc), (orow, oc) = cyan[0], orange[0]
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for r in range(h):
+        out[r][cc] = 8
+        out[r][oc] = 7
+    for c in range(w):
+        out[cr][c] = 8
+        out[orow][c] = 7
+    out[cr][oc] = 2
+    out[orow][cc] = 2
+    return out
+
+
+def corner_voronoi_parity(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 6:
+        return clone(grid)
+    corner_set = {(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)}
+    seeds = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if len(seeds) < 2 or any((r, c) not in corner_set for r, c, _ in seeds):
+        return clone(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            dists = [(abs(sr - r) + abs(sc - c), sr, sc, color) for sr, sc, color in seeds]
+            min_dist = min(dist for dist, *_ in dists)
+            closest = [(sr, sc, color) for dist, sr, sc, color in dists if dist == min_dist]
+            if len(closest) != 1:
+                continue
+            sr, sc, color = closest[0]
+            if max(abs(sr - r), abs(sc - c)) % 2 == 0:
+                out[r][c] = color
+    return out
+
+
+def quadrant_column_projection(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 2 or h > 6:
+        return clone(grid)
+    palette = sorted(nonzero_colors(grid) - {8})
+    if len(palette) != 1:
+        return clone(grid)
+    color = palette[0]
+    pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == color]
+    if not pts:
+        return clone(grid)
+    out = [[0 for _ in range(2 * w)] for _ in range(2 * h)]
+    for _, c in pts:
+        for r in range(2 * h):
+            out[r][c] = 8
+            out[r][c + w] = 8
+    for r, c in pts:
+        for dr, dc in ((0, 0), (0, w), (h, 0), (h, w)):
+            out[r + dr][c + dc] = color
+    return out
+
+
+def green_pair_cyan_caps(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 6 or h > 10:
+        return clone(grid)
+    comps = [comp for comp in connected_components(grid) if grid[comp[0][0]][comp[0][1]] == 3]
+    rects: list[tuple[int, int, int, int, int]] = []
+    for comp in comps:
+        rect = _component_rect(comp)
+        if rect is None:
+            continue
+        r0, r1, c0, c1 = rect
+        if r1 - r0 == c1 - c0:
+            rects.append((r0, r1, c0, c1, r1 - r0 + 1))
+    out = clone(grid)
+    changed = False
+    for a, b in combinations(rects, 2):
+        top, bottom = sorted((a, b), key=lambda item: item[0])
+        tr0, tr1, tc0, tc1, size_a = top
+        br0, br1, bc0, bc1, size_b = bottom
+        if size_a != size_b or br0 != tr1 + 1:
+            continue
+        delta = bc0 - tc0
+        if abs(delta) != size_a:
+            continue
+        top_c = tc0 + 2 * delta
+        bottom_c = bc0 - 2 * delta
+        top_r = tr0 - size_a
+        bottom_r = br1 + 1
+        for dr in range(size_a):
+            for dc in range(size_a):
+                for rr, cc in ((top_r + dr, top_c + dc), (bottom_r + dr, bottom_c + dc)):
+                    if 0 <= rr < h and 0 <= cc < w:
+                        out[rr][cc] = 8
+                        changed = True
+    return out if changed else clone(grid)
+
+
 def rotate90(grid: Grid) -> Grid:
     h, w = shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
@@ -520,6 +853,22 @@ def swap_colors(grid: Grid, a: int, b: int) -> Grid:
     return out
 
 
+def generator_palette(grid: Grid) -> list[int]:
+    return list(nonzero_colors(grid))
+
+
+def swap_colors_generator(grid: Grid, a: int, b: int) -> Grid:
+    palette = generator_palette(grid)
+    if len(palette) < 2:
+        return clone(grid)
+    c1, c2 = a, b
+    if c1 not in palette:
+        c1 = palette[0]
+    if c2 not in palette or c2 == c1:
+        c2 = next((color for color in palette if color != c1), c1)
+    return swap_colors(grid, c1, c2)
+
+
 def replace_color(grid: Grid, src: int, dst: int) -> Grid:
     return [[dst if value == src else value for value in row] for row in grid]
 
@@ -528,8 +877,26 @@ def keep_color(grid: Grid, color: int, dim: int = 5) -> Grid:
     return [[value if value in {0, color} else dim for value in row] for row in grid]
 
 
+def keep_color_generator(grid: Grid, color: int, dim: int = 5) -> Grid:
+    palette = generator_palette(grid)
+    if not palette:
+        return clone(grid)
+    if color not in palette:
+        color = palette[0]
+    return keep_color(grid, color, dim=dim)
+
+
 def remove_color(grid: Grid, color: int) -> Grid:
     return replace_color(grid, color, 0)
+
+
+def remove_color_generator(grid: Grid, color: int) -> Grid:
+    palette = generator_palette(grid)
+    if not palette:
+        return clone(grid)
+    if color not in palette:
+        color = palette[0]
+    return remove_color(grid, color)
 
 
 def fill_rectangle_holes(grid: Grid) -> Grid:
@@ -635,7 +1002,7 @@ def primitive_ops(examples: Sequence[Example]) -> list[Op]:
     return ops
 
 
-def post_transform_ops(examples: Sequence[Example]) -> list[Op]:
+def post_transform_ops(examples: Sequence[Example], *, include_color: bool = True) -> list[Op]:
     palette: set[int] = set()
     for ex in examples:
         palette |= colors(ex["input"]) | colors(ex["output"])
@@ -659,11 +1026,18 @@ def post_transform_ops(examples: Sequence[Example]) -> list[Op]:
     for direction in ("up", "down", "left", "right"):
         for amount in (1, 2, 3):
             ops.append(Op(f"shift_{direction}_{amount}", lambda g, d=direction, a=amount: shift(g, d, a)))
+    if not include_color:
+        return ops
     for a, b in combinations(nonzero_palette, 2):
         ops.append(Op(f"swap_{a}_{b}", lambda g, x=a, y=b: swap_colors(g, x, y)))
     for c in nonzero_palette:
         ops.append(Op(f"remove_{c}", lambda g, x=c: remove_color(g, x)))
         ops.append(Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x)))
+    for a, b in combinations(range(1, 10), 2):
+        ops.append(Op(f"swap_gen_{a}_{b}", lambda g, x=a, y=b: swap_colors_generator(g, x, y)))
+    for c in range(1, 10):
+        ops.append(Op(f"remove_gen_{c}", lambda g, x=c: remove_color_generator(g, x)))
+        ops.append(Op(f"highlight_gen_{c}", lambda g, x=c: keep_color_generator(g, x)))
     return ops
 
 
@@ -700,6 +1074,28 @@ def targeted_base_candidate_ops(
         ex["input"] != complete_same_color_spans(ex["input"]) for ex in examples
     ):
         ops.append(Op("complete_spans", complete_same_color_spans))
+    elif all(ex["input"] != punchcard_odd_holes(ex["input"]) for ex in examples):
+        ops.append(Op("punchcards", punchcard_odd_holes))
+    elif all(ex["input"] != box_inner_corners_to_outer_diagonals(ex["input"]) for ex in examples):
+        ops.append(Op("box_corners", box_inner_corners_to_outer_diagonals))
+    elif all(ex["input"] != fill_symmetric_yellow_cutouts(ex["input"]) for ex in examples):
+        ops.append(Op("fill_sym_yellow", fill_symmetric_yellow_cutouts))
+    elif all(ex["input"] != replicate_quadrant_pattern(ex["input"]) for ex in examples):
+        ops.append(Op("replicate_quadrants", replicate_quadrant_pattern))
+    elif all(ex["input"] != cyan_zigzag_path(ex["input"]) for ex in examples):
+        ops.append(Op("cyan_zigzag", cyan_zigzag_path))
+    elif all(ex["input"] != gray_towers_to_blue_bases(ex["input"]) for ex in examples):
+        ops.append(Op("gray_towers", gray_towers_to_blue_bases))
+    elif all(ex["input"] != complete_partial_street(ex["input"]) for ex in examples):
+        ops.append(Op("partial_street", complete_partial_street))
+    elif all(ex["input"] != two_point_crosses(ex["input"]) for ex in examples):
+        ops.append(Op("two_point_crosses", two_point_crosses))
+    elif all(ex["input"] != corner_voronoi_parity(ex["input"]) for ex in examples):
+        ops.append(Op("corner_voronoi", corner_voronoi_parity))
+    elif all(shape(ex["input"]) != shape(quadrant_column_projection(ex["input"])) for ex in examples):
+        ops.append(Op("quadrant_columns", quadrant_column_projection))
+    elif all(ex["input"] != green_pair_cyan_caps(ex["input"]) for ex in examples):
+        ops.append(Op("green_caps", green_pair_cyan_caps))
     elif enable_small_zoom_targets and all(
         1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
     ):
@@ -918,9 +1314,12 @@ class ARCSolver:
         if not base_ops:
             return None
         outputs = tuple(freeze(ex["output"]) for ex in examples)
-        post_ops = post_transform_ops(examples)
 
         for base_op in base_ops:
+            post_ops = post_transform_ops(
+                examples,
+                include_color=base_op.name not in {"replicate_quadrants", "cyan_zigzag"},
+            )
             try:
                 starts = tuple(freeze(base_op.func(ex["input"])) for ex in examples)
                 test_start = freeze(base_op.func(test_input))
@@ -938,7 +1337,36 @@ class ARCSolver:
                 max_depth=min(self.post_chain_depth, self.targeted_post_depth),
                 max_states=self.targeted_max_states,
             )
-            if solved is None and base_op.name in {"sym_cutout", "framed_pair"}:
+            same_train_shapes = all(shape([list(row) for row in start]) == shape([list(row) for row in output]) for start, output in zip(starts, outputs))
+            if solved is None and (
+                base_op.name == "cyan_zigzag" or (base_op.name == "replicate_quadrants" and same_train_shapes)
+            ):
+                solved = self._search_exact_program_bfs(
+                    starts,
+                    test_start,
+                    outputs,
+                    post_ops,
+                    max_depth=self.post_chain_depth,
+                    max_states=max(self.targeted_max_states, 100000),
+                )
+            beam_fallback_names = {
+                "sym_cutout",
+                "framed_pair",
+                "punchcards",
+                "box_corners",
+                "fill_sym_yellow",
+                "replicate_quadrants",
+                "cyan_zigzag",
+                "gray_towers",
+                "partial_street",
+                "two_point_crosses",
+                "corner_voronoi",
+                "quadrant_columns",
+                "green_caps",
+            }
+            if base_op.name == "replicate_quadrants" and not same_train_shapes:
+                beam_fallback_names.remove("replicate_quadrants")
+            if solved is None and base_op.name in beam_fallback_names:
                 solved = self._search_exact_program(
                     starts,
                     test_start,

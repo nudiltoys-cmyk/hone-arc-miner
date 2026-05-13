@@ -76,13 +76,13 @@ python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7 --js
 Current safe default result from 2026-05-13:
 
 ```text
-exact=9/30 (0.300) shape=0.900 partial=0.820 grid=0.729 elapsed=117.1s
+exact=9/30 (0.300) shape=0.900 partial=0.820 grid=0.729 elapsed=88.2s
 ```
 
 Current cross-seed smoke from 2026-05-13:
 
 ```text
-exact=5/20 (0.250) shape=0.800 partial=0.740 grid=0.649 elapsed=73.8s
+exact=7/20 (0.350) shape=0.800 partial=0.747 grid=0.657 elapsed=72.8s
 ```
 
 Latest saved validator-style dry run from 2026-05-13:

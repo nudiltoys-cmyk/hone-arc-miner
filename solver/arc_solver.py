@@ -688,6 +688,8 @@ def quadrant_column_projection(grid: Grid) -> Grid:
     pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == color]
     if not pts:
         return clone(grid)
+    if color == 5 and len(pts) == h and all(sum(1 for value in row if value == 5) == 1 for row in grid):
+        return clone(grid)
     out = [[0 for _ in range(2 * w)] for _ in range(2 * h)]
     for _, c in pts:
         for r in range(2 * h):
@@ -789,6 +791,71 @@ def macro_grid_pair_interpolate(grid: Grid) -> Grid:
             if out[rr][cc] != avalue:
                 out[rr][cc] = avalue
                 changed = True
+    return out if changed else clone(grid)
+
+
+def alternating_rays_from_points(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 7 or h > 14 or w < 7 or w > 14:
+        return clone(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value not in {0, 5}]
+    if not pts or len(pts) > 4 or any(c > w // 2 for _, c, _ in pts):
+        return clone(grid)
+    if len({r for r, _, _ in pts}) != len(pts) or len({value for _, _, value in pts}) != len(pts):
+        return clone(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for r, c, value in pts:
+        for cc in range(c, w):
+            out[r][cc] = value if cc % 2 == c % 2 else 5
+    return out
+
+
+def complete_hidden_row_patterns(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h % 2 or w % 2 or h < 6 or w < 8 or w > 10:
+        return clone(grid)
+    rows = [r for r, row in enumerate(grid) if any(value != 0 for value in row)]
+    if len(rows) < 2:
+        return clone(grid)
+    full_rows = [r for r in rows if all(value != 0 for value in grid[r])]
+    if not full_rows:
+        return clone(grid)
+    template = grid[full_rows[0]]
+    groups: dict[int, set[int]] = {}
+    for c, value in enumerate(template):
+        if value == 0:
+            return clone(grid)
+        groups.setdefault(value, set()).add(c)
+    if len(groups) != 2:
+        return clone(grid)
+    group_sets = list(groups.values())
+
+    out = clone(grid)
+    changed = False
+    for r in rows:
+        nonzero = [(c, value) for c, value in enumerate(grid[r]) if value != 0]
+        colors_in_row = {value for _, value in nonzero}
+        if len(colors_in_row) != 2:
+            continue
+        mapping: dict[int, int] = {}
+        ok = True
+        for c, value in nonzero:
+            matches = [idx for idx, cols in enumerate(group_sets) if c in cols]
+            if len(matches) != 1:
+                ok = False
+                break
+            idx = matches[0]
+            if idx in mapping and mapping[idx] != value:
+                ok = False
+                break
+            mapping[idx] = value
+        if not ok or len(mapping) != 2:
+            continue
+        for idx, cols in enumerate(group_sets):
+            for c in cols:
+                if out[r][c] != mapping[idx]:
+                    out[r][c] = mapping[idx]
+                    changed = True
     return out if changed else clone(grid)
 
 
@@ -1158,6 +1225,10 @@ def targeted_base_candidate_ops(
         ops.append(Op("green_caps", green_pair_cyan_caps))
     elif all(ex["input"] != macro_grid_pair_interpolate(ex["input"]) for ex in examples):
         ops.append(Op("macro_interp", macro_grid_pair_interpolate))
+    elif all(ex["input"] != alternating_rays_from_points(ex["input"]) for ex in examples):
+        ops.append(Op("alternating_rays", alternating_rays_from_points))
+    elif all(ex["input"] != complete_hidden_row_patterns(ex["input"]) for ex in examples):
+        ops.append(Op("row_patterns", complete_hidden_row_patterns))
     elif enable_small_zoom_targets and all(
         1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
     ):
@@ -1376,6 +1447,7 @@ class ARCSolver:
         if not base_ops:
             return None
         outputs = tuple(freeze(ex["output"]) for ex in examples)
+        input_starts = tuple(freeze(ex["input"]) for ex in examples)
 
         for base_op in base_ops:
             post_ops = post_transform_ops(
@@ -1387,9 +1459,15 @@ class ARCSolver:
                 test_start = freeze(base_op.func(test_input))
             except Exception:
                 continue
-            if starts == tuple(freeze(ex["input"]) for ex in examples):
+            if starts == input_starts:
                 continue
             if not self._states_within_limits(starts) or not self._state_within_limits(test_start):
+                continue
+            same_train_shapes = all(
+                shape([list(row) for row in start]) == shape([list(row) for row in output])
+                for start, output in zip(starts, outputs)
+            )
+            if base_op.name == "replicate_quadrants" and not same_train_shapes:
                 continue
             solved = self._search_exact_program_bfs(
                 starts,
@@ -1399,7 +1477,6 @@ class ARCSolver:
                 max_depth=min(self.post_chain_depth, self.targeted_post_depth),
                 max_states=self.targeted_max_states,
             )
-            same_train_shapes = all(shape([list(row) for row in start]) == shape([list(row) for row in output]) for start, output in zip(starts, outputs))
             if solved is None and (
                 base_op.name == "cyan_zigzag" or (base_op.name == "replicate_quadrants" and same_train_shapes)
             ):
@@ -1427,9 +1504,9 @@ class ARCSolver:
                 "green_caps",
                 "sparse_zoom3",
                 "macro_interp",
+                "alternating_rays",
+                "row_patterns",
             }
-            if base_op.name == "replicate_quadrants" and not same_train_shapes:
-                beam_fallback_names.remove("replicate_quadrants")
             if solved is None and base_op.name in beam_fallback_names:
                 solved = self._search_exact_program(
                     starts,

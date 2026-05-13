@@ -64,3 +64,29 @@ Once validator results arrive:
 - If outputs truncate, raise `VLLM_MAX_TOKENS`.
 - If vLLM cannot start, lower `VLLM_MAX_MODEL_LEN` or switch to a smaller model.
 - If latency hurts, keep `VLLM_ATTEMPTS=1` and improve deterministic fast paths.
+
+## Deterministic Solver Profiles
+
+Use the safe default first:
+
+```bash
+python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7 --json-out /tmp/hone_default_n30.json
+```
+
+Current safe default result from 2026-05-13:
+
+```text
+exact=5/30 (0.167) shape=0.900 partial=0.795 grid=0.685 elapsed=69.0s
+```
+
+Useful diagnostic mode:
+
+```bash
+python3 tools/evaluate_local.py --n 10 --seed 7 --chain-min 3 --chain-max 7 --include-grids --json-out /tmp/hone_debug_n10.json
+```
+
+Experimental knobs:
+
+- `ARC_ENABLE_SMALL_ZOOM_TARGETS=1` found one extra seed-7 n30 exact (`6/30`) but took about `195s`; do not default it yet.
+- `ARC_ENABLE_TWO_STAGE=1 ARC_POST_BEAM_WIDTH=8` is a broader post-chain exact search for investigation.
+- `ARC_MAX_SEARCH_DEPTH=4` can improve exact rate on some samples but may reduce partial score and raise latency.

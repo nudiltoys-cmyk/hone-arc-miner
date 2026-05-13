@@ -27,4 +27,16 @@ The solver has two layers:
 
 ## Current Baseline
 
-Local no-vLLM synthetic smoke tests compile and run, but exact-match accuracy is not yet competitive. This repo should be treated as a validator-side vLLM candidate, not a finished deterministic solver.
+Local no-vLLM synthetic smoke tests compile and run, but exact-match accuracy is not yet competitive. This repo should be treated as a validator-side vLLM candidate plus an improving deterministic fallback, not a finished deterministic solver.
+
+Latest local checks on 2026-05-13:
+
+- Safe default: `python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7`
+  - `exact=5/30`, `shape=0.900`, `partial=0.795`, `grid=0.685`, `elapsed=69.0s`.
+- Cross-seed smoke: `python3 tools/evaluate_local.py --n 20 --seed 11 --chain-min 3 --chain-max 7`
+  - `exact=1/20`, `shape=0.800`, `partial=0.668`, `grid=0.539`, `elapsed=66.4s`.
+
+Keep these deterministic solver flags off by default unless benchmarking says otherwise:
+
+- `ARC_ENABLE_TWO_STAGE=1`: broader exact post-chain search; can find extra exacts but is slow.
+- `ARC_ENABLE_SMALL_ZOOM_TARGETS=1`: solved one extra seed-7 n30 task, but raised elapsed to about 195s.

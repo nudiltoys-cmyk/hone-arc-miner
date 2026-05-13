@@ -136,7 +136,11 @@ def evaluate(
             problem["task_hash"],
         )
         raw = _chat_completion(tokenizer, model, prompt, max_new_tokens)
-        predicted = solver._parse_vllm_grid(raw)  # noqa: SLF001
+        predicted = solver._solve_from_llm_content(  # noqa: SLF001
+            raw,
+            problem["train_examples"],
+            problem["test_input"],
+        )
         if predicted is None:
             predicted = solver.solve(
                 problem["train_examples"],

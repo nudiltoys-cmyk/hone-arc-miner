@@ -258,10 +258,11 @@ class Op:
 
 
 def primitive_ops(examples: Sequence[Example]) -> list[Op]:
-    palette = set(range(10))
+    palette: set[int] = set()
     for ex in examples:
         palette |= colors(ex["input"]) | colors(ex["output"])
     palette = {c for c in palette if 0 <= c <= 9}
+    nonzero_palette = sorted(palette - {0})
 
     ops: list[Op] = [
         Op("id", clone),
@@ -287,11 +288,11 @@ def primitive_ops(examples: Sequence[Example]) -> list[Op]:
     for direction in ("up", "down", "left", "right"):
         for amount in (1, 2, 3):
             ops.append(Op(f"shift_{direction}_{amount}", lambda g, d=direction, a=amount: shift(g, d, a)))
-    for a, b in combinations(sorted(palette), 2):
+    for a, b in combinations(nonzero_palette, 2):
         if a == b:
             continue
         ops.append(Op(f"swap_{a}_{b}", lambda g, x=a, y=b: swap_colors(g, x, y)))
-    for c in sorted(palette):
+    for c in nonzero_palette:
         ops.append(Op(f"remove_{c}", lambda g, x=c: remove_color(g, x)))
         ops.append(Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x)))
     return ops
@@ -345,6 +346,8 @@ class ARCSolver:
     def __init__(self) -> None:
         self.max_search_depth = int(os.getenv("ARC_MAX_SEARCH_DEPTH", "3"))
         self.max_states_per_depth = int(os.getenv("ARC_MAX_STATES_PER_DEPTH", "1200"))
+        self.beam_width = int(os.getenv("ARC_BEAM_WIDTH", "80"))
+        self.enable_exact_bfs = os.getenv("ARC_ENABLE_EXACT_BFS", "0") == "1"
         self.vllm_client = None
         self.vllm_model_name: str | None = None
         self.vllm_attempts = int(os.getenv("VLLM_ATTEMPTS", "1"))
@@ -356,9 +359,14 @@ class ARCSolver:
 
         candidates: list[Grid] = []
 
-        exact = self._try_solver(self._solve_by_exact_program, train_examples, test_input)
-        if exact is not None:
-            return exact
+        program = self._try_solver(self._solve_by_best_program, train_examples, test_input)
+        if program is not None:
+            return program
+
+        if self.enable_exact_bfs:
+            exact = self._try_solver(self._solve_by_exact_program, train_examples, test_input)
+            if exact is not None:
+                return exact
 
         weak_solvers = (
             self._solve_by_color_mapping,
@@ -450,6 +458,90 @@ class ARCSolver:
             if best_depth_states > self.max_states_per_depth * self.max_search_depth:
                 break
         return None
+
+    def _solve_by_best_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        outputs = tuple(freeze(ex["output"]) for ex in examples)
+        starts = tuple(freeze(ex["input"]) for ex in examples)
+        test_start = freeze(test_input)
+        ops = primitive_ops(examples)
+
+        start_score = self._score_train_states(starts, outputs)
+        best_score = start_score
+        best_test = test_start
+        beam: list[tuple[float, tuple[tuple[tuple[int, ...], ...], ...], tuple[tuple[int, ...], ...], tuple[str, ...]]] = [
+            (start_score, starts, test_start, ())
+        ]
+        seen = {starts}
+
+        for _ in range(self.max_search_depth):
+            expanded: list[
+                tuple[float, tuple[tuple[tuple[int, ...], ...], ...], tuple[tuple[int, ...], ...], tuple[str, ...]]
+            ] = []
+            for _, train_states, test_state, program in beam:
+                for op in ops:
+                    try:
+                        next_train = tuple(
+                            freeze(op.func([list(row) for row in state])) for state in train_states
+                        )
+                        if next_train in seen:
+                            continue
+                        if not all(valid([list(row) for row in state]) for state in next_train):
+                            continue
+                        next_test = freeze(op.func([list(row) for row in test_state]))
+                    except Exception:
+                        continue
+
+                    seen.add(next_train)
+                    score = self._score_train_states(next_train, outputs)
+                    if next_train == outputs:
+                        return [list(row) for row in next_test]
+                    if score > best_score:
+                        best_score = score
+                        best_test = next_test
+                    expanded.append((score, next_train, next_test, program + (op.name,)))
+
+            if not expanded:
+                break
+            expanded.sort(key=lambda item: item[0], reverse=True)
+            beam = expanded[: self.beam_width]
+
+        # Below this threshold the program is usually just an attractive accident.
+        if best_score <= max(start_score + 0.05, 0.58):
+            return None
+        return [list(row) for row in best_test]
+
+    def _score_train_states(
+        self,
+        predicted: tuple[tuple[tuple[int, ...], ...], ...],
+        expected: tuple[tuple[tuple[int, ...], ...], ...],
+    ) -> float:
+        if not predicted:
+            return 0.0
+        return sum(
+            self._score_grid([list(row) for row in pred], [list(row) for row in exp])
+            for pred, exp in zip(predicted, expected)
+        ) / len(predicted)
+
+    def _score_grid(self, pred: Grid, target: Grid) -> float:
+        if not valid(pred) or not valid(target):
+            return 0.0
+        ph, pw = shape(pred)
+        th, tw = shape(target)
+        overlap_h = min(ph, th)
+        overlap_w = min(pw, tw)
+        overlap = max(1, overlap_h * overlap_w)
+        matches = sum(
+            1
+            for r in range(overlap_h)
+            for c in range(overlap_w)
+            if pred[r][c] == target[r][c]
+        )
+        area_penalty = min(ph * pw, th * tw) / max(ph * pw, th * tw, 1)
+        shape_score = 1.0 if (ph, pw) == (th, tw) else 0.25 * area_penalty
+        pred_colors = colors(pred)
+        target_colors = colors(target)
+        color_score = len(pred_colors & target_colors) / max(len(pred_colors | target_colors), 1)
+        return 0.65 * (matches / overlap) + 0.25 * shape_score + 0.10 * color_score
 
     def _solve_by_color_mapping(self, examples: list[Example], test_input: Grid) -> Grid | None:
         mapping = learn_color_mapping(examples)

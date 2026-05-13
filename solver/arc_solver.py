@@ -226,6 +226,183 @@ def extract_symmetric_cutout(grid: Grid) -> Grid:
     return candidates[0][1]
 
 
+def _regular_line_positions(grid: Grid, line_color: int, axis: str) -> list[int]:
+    h, w = shape(grid)
+    limit = h if axis == "row" else w
+    width = w if axis == "row" else h
+    positions: list[int] = []
+    for i in range(limit):
+        values = grid[i] if axis == "row" else [grid[r][i] for r in range(h)]
+        if sum(1 for value in values if value == line_color) >= max(2, width // 2):
+            positions.append(i)
+    if len(positions) < 2:
+        return []
+    gaps = [b - a for a, b in zip(positions, positions[1:])]
+    if len(set(gaps)) != 1 or gaps[0] < 2:
+        return []
+    return positions
+
+
+def permeable_linegrid_fill(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 7:
+        return clone(grid)
+    nonzero = [value for row in grid for value in row if value != 0]
+    if not nonzero:
+        return clone(grid)
+    line_color = Counter(nonzero).most_common(1)[0][0]
+    line_rows = _regular_line_positions(grid, line_color, "row")
+    line_cols = _regular_line_positions(grid, line_color, "col")
+    if not line_rows or line_rows != line_cols:
+        return clone(grid)
+    spacing = line_rows[0]
+    if spacing < 2 or any(pos != spacing + i * (spacing + 1) for i, pos in enumerate(line_rows)):
+        return clone(grid)
+    size = len(line_rows) + 1
+    if h != size * (spacing + 1) - 1:
+        return clone(grid)
+
+    bitmap = [[3 for _ in range(size)] for _ in range(size)]
+    line_row_set = set(line_rows)
+    line_col_set = set(line_cols)
+    holes: list[tuple[int, int]] = []
+    for r in range(h):
+        for c in range(w):
+            on_line = r in line_row_set or c in line_col_set
+            on_hline = r in line_row_set and c not in line_col_set
+            on_vline = c in line_col_set and r not in line_row_set
+            if grid[r][c] == 0 and on_line:
+                holes.append((r, c))
+                if on_hline:
+                    br = r // (spacing + 1)
+                    bc = c // (spacing + 1)
+                    if 0 <= br < size - 1 and 0 <= bc < size:
+                        bitmap[br][bc] = 4
+                        bitmap[br + 1][bc] = 4
+                if on_vline:
+                    br = r // (spacing + 1)
+                    bc = c // (spacing + 1)
+                    if 0 <= br < size and 0 <= bc < size - 1:
+                        bitmap[br][bc] = 4
+                        bitmap[br][bc + 1] = 4
+    if not holes:
+        return clone(grid)
+
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for r in range(h):
+        for c in range(w):
+            if r in line_row_set or c in line_col_set:
+                out[r][c] = line_color
+            else:
+                out[r][c] = bitmap[r // (spacing + 1)][c // (spacing + 1)]
+    for r, c in holes:
+        out[r][c] = 4
+    return out
+
+
+def looks_like_permeable_linegrid(grid: Grid) -> bool:
+    h, w = shape(grid)
+    return h == w and h >= 7 and len(nonzero_colors(grid)) == 1
+
+
+def extract_framed_pair_sprite(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    yellow_pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 4]
+    if len(yellow_pts) != 4:
+        return clone(grid)
+    rows = sorted({r for r, _ in yellow_pts})
+    cols = sorted({c for _, c in yellow_pts})
+    if len(rows) != 2 or len(cols) != 2:
+        return clone(grid)
+    r0, r1 = rows
+    c0, c1 = cols
+    if r1 - r0 < 3 or c1 - c0 < 5:
+        return clone(grid)
+    if {(r0, c0), (r0, c1), (r1, c0), (r1, c1)} != set(yellow_pts):
+        return clone(grid)
+
+    left_vals = [grid[r][c0] for r in range(r0 + 1, r1)]
+    right_vals = [grid[r][c1] for r in range(r0 + 1, r1)]
+    if len(set(left_vals)) != 1 or len(set(right_vals)) != 1:
+        return clone(grid)
+    left_color, right_color = left_vals[0], right_vals[0]
+    if left_color in {0, 4} or right_color in {0, 4} or left_color == right_color:
+        return clone(grid)
+
+    frame_cells = {
+        (r, c)
+        for r in range(r0, r1 + 1)
+        for c in range(c0, c1 + 1)
+        if r in {r0, r1} or c in {c0, c1}
+    }
+    sprite_cells = [
+        (r, c)
+        for r, row in enumerate(grid)
+        for c, value in enumerate(row)
+        if value in {left_color, right_color} and (r, c) not in frame_cells
+    ]
+    if not sprite_cells:
+        return clone(grid)
+    sr0, sr1 = min(r for r, _ in sprite_cells), max(r for r, _ in sprite_cells)
+    sc0, sc1 = min(c for _, c in sprite_cells), max(c for _, c in sprite_cells)
+    inner_h, inner_w = r1 - r0 - 1, c1 - c0 - 1
+    if sr1 - sr0 + 1 != inner_h or sc1 - sc0 + 1 != inner_w:
+        return clone(grid)
+
+    sprite = [[0 for _ in range(inner_w)] for _ in range(inner_h)]
+    for r, c in sprite_cells:
+        sprite[r - sr0][c - sc0] = grid[r][c]
+
+    def orient_score(candidate: Grid) -> int:
+        half = max(1, inner_w // 2)
+        return sum(
+            1
+            for rr, row in enumerate(candidate)
+            for cc, value in enumerate(row)
+            if (cc < half and value == left_color) or (cc >= half and value == right_color)
+        )
+
+    flipped = flip_h(sprite)
+    if orient_score(flipped) > orient_score(sprite):
+        sprite = flipped
+
+    out = [[0 for _ in range(c1 - c0 + 1)] for _ in range(r1 - r0 + 1)]
+    out[0][0] = out[0][-1] = out[-1][0] = out[-1][-1] = 4
+    for r in range(1, len(out) - 1):
+        out[r][0] = left_color
+        out[r][-1] = right_color
+    for r in range(inner_h):
+        for c in range(inner_w):
+            out[r + 1][c + 1] = sprite[r][c]
+    return out
+
+
+def complete_same_color_spans(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 7 or w < 7:
+        return clone(grid)
+    out = clone(grid)
+    pts_by_color: dict[int, list[tuple[int, int]]] = {}
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value not in {0, 1}:
+                pts_by_color.setdefault(value, []).append((r, c))
+    changed = False
+    for color, pts in pts_by_color.items():
+        for (r1, c1), (r2, c2) in combinations(pts, 2):
+            if r1 == r2 and abs(c1 - c2) == 6:
+                mid = (c1 + c2) // 2
+                if out[r1][mid] in {0, 1}:
+                    out[r1][mid] = color
+                    changed = True
+            if c1 == c2 and abs(r1 - r2) == 6:
+                mid = (r1 + r2) // 2
+                if out[mid][c1] in {0, 1}:
+                    out[mid][c1] = color
+                    changed = True
+    return out if changed else clone(grid)
+
+
 def rotate90(grid: Grid) -> Grid:
     h, w = shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
@@ -513,6 +690,16 @@ def targeted_base_candidate_ops(
         ops.append(Op("row_diag", row_diagonal_expansion))
     elif all(shape(ex["input"]) != shape(extract_symmetric_cutout(ex["input"])) for ex in examples):
         ops.append(Op("sym_cutout", extract_symmetric_cutout))
+    elif all(looks_like_permeable_linegrid(ex["input"]) for ex in examples) and all(
+        ex["input"] != permeable_linegrid_fill(ex["input"]) for ex in examples
+    ):
+        ops.append(Op("linegrid_fill", permeable_linegrid_fill))
+    elif all(shape(ex["input"]) != shape(extract_framed_pair_sprite(ex["input"])) for ex in examples):
+        ops.append(Op("framed_pair", extract_framed_pair_sprite))
+    elif all(shape(ex["input"]) == (8, 8) for ex in examples) and all(
+        ex["input"] != complete_same_color_spans(ex["input"]) for ex in examples
+    ):
+        ops.append(Op("complete_spans", complete_same_color_spans))
     elif enable_small_zoom_targets and all(
         1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
     ):
@@ -572,7 +759,7 @@ class ARCSolver:
         self.post_chain_depth = int(os.getenv("ARC_POST_CHAIN_DEPTH", "7"))
         self.post_beam_width = int(os.getenv("ARC_POST_BEAM_WIDTH", "16"))
         self.targeted_post_depth = int(os.getenv("ARC_TARGETED_POST_DEPTH", "4"))
-        self.targeted_max_states = int(os.getenv("ARC_TARGETED_MAX_STATES", "60000"))
+        self.targeted_max_states = int(os.getenv("ARC_TARGETED_MAX_STATES", "20000"))
         self.enable_small_zoom_targets = os.getenv("ARC_ENABLE_SMALL_ZOOM_TARGETS", "0") == "1"
         self.max_grid_cells = int(os.getenv("ARC_MAX_GRID_CELLS", "1600"))
         self.enable_exact_bfs = os.getenv("ARC_ENABLE_EXACT_BFS", "0") == "1"
@@ -751,7 +938,7 @@ class ARCSolver:
                 max_depth=min(self.post_chain_depth, self.targeted_post_depth),
                 max_states=self.targeted_max_states,
             )
-            if solved is None and base_op.name == "sym_cutout":
+            if solved is None and base_op.name in {"sym_cutout", "framed_pair"}:
                 solved = self._search_exact_program(
                     starts,
                     test_start,

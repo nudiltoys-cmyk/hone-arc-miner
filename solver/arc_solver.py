@@ -66,6 +66,48 @@ def crop_bbox(grid: Grid, background: int = 0) -> Grid:
     return [row[c0 : c1 + 1] for row in grid[r0 : r1 + 1]]
 
 
+def connected_components(grid: Grid, background: int = 0) -> list[list[tuple[int, int]]]:
+    h, w = shape(grid)
+    seen: set[tuple[int, int]] = set()
+    comps: list[list[tuple[int, int]]] = []
+    for sr in range(h):
+        for sc in range(w):
+            if grid[sr][sc] == background or (sr, sc) in seen:
+                continue
+            color = grid[sr][sc]
+            stack = [(sr, sc)]
+            seen.add((sr, sc))
+            comp: list[tuple[int, int]] = []
+            while stack:
+                r, c = stack.pop()
+                comp.append((r, c))
+                for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                    if (
+                        0 <= nr < h
+                        and 0 <= nc < w
+                        and (nr, nc) not in seen
+                        and grid[nr][nc] == color
+                    ):
+                        seen.add((nr, nc))
+                        stack.append((nr, nc))
+            comps.append(comp)
+    return comps
+
+
+def keep_largest_component(grid: Grid) -> Grid:
+    comps = connected_components(grid)
+    if not comps:
+        return clone(grid)
+    comp = max(comps, key=len)
+    keep = set(comp)
+    h, w = shape(grid)
+    return [[grid[r][c] if (r, c) in keep else 0 for c in range(w)] for r in range(h)]
+
+
+def crop_largest_component(grid: Grid) -> Grid:
+    return crop_bbox(keep_largest_component(grid))
+
+
 def rotate90(grid: Grid) -> Grid:
     h, w = shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
@@ -298,6 +340,50 @@ def primitive_ops(examples: Sequence[Example]) -> list[Op]:
     return ops
 
 
+def post_transform_ops(examples: Sequence[Example]) -> list[Op]:
+    palette: set[int] = set()
+    for ex in examples:
+        palette |= colors(ex["input"]) | colors(ex["output"])
+    nonzero_palette = sorted(c for c in palette if 1 <= c <= 9)
+
+    ops: list[Op] = [
+        Op("id", clone),
+        Op("rot180", rotate180),
+        Op("rot270", rotate270),
+        Op("transpose", transpose),
+        Op("anti_diag", flip_antidiagonal),
+        Op("recenter", recenter),
+        Op("zoom2", lambda g: zoom(g, 2)),
+        Op("zoom3", lambda g: zoom(g, 3)),
+        Op("downsample2", downsample2),
+        Op("grav_down", lambda g: gravity(g, "down")),
+        Op("grav_up", lambda g: gravity(g, "up")),
+        Op("grav_left", lambda g: gravity(g, "left")),
+        Op("grav_right", lambda g: gravity(g, "right")),
+    ]
+    for direction in ("up", "down", "left", "right"):
+        for amount in (1, 2, 3):
+            ops.append(Op(f"shift_{direction}_{amount}", lambda g, d=direction, a=amount: shift(g, d, a)))
+    for a, b in combinations(nonzero_palette, 2):
+        ops.append(Op(f"swap_{a}_{b}", lambda g, x=a, y=b: swap_colors(g, x, y)))
+    for c in nonzero_palette:
+        ops.append(Op(f"remove_{c}", lambda g, x=c: remove_color(g, x)))
+        ops.append(Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x)))
+    return ops
+
+
+def base_candidate_ops() -> list[Op]:
+    return [
+        Op("id", clone),
+        Op("crop", crop_bbox),
+        Op("keep_largest", keep_largest_component),
+        Op("crop_largest", crop_largest_component),
+        Op("fill_rect", fill_rectangle_holes),
+        Op("connect_lines", draw_lines_between_same_color_points),
+        Op("recenter", recenter),
+    ]
+
+
 def learn_color_mapping(examples: Sequence[Example]) -> dict[int, int] | None:
     mapping: dict[int, int] = {}
     for ex in examples:
@@ -347,7 +433,11 @@ class ARCSolver:
         self.max_search_depth = int(os.getenv("ARC_MAX_SEARCH_DEPTH", "3"))
         self.max_states_per_depth = int(os.getenv("ARC_MAX_STATES_PER_DEPTH", "1200"))
         self.beam_width = int(os.getenv("ARC_BEAM_WIDTH", "80"))
+        self.post_chain_depth = int(os.getenv("ARC_POST_CHAIN_DEPTH", "7"))
+        self.post_beam_width = int(os.getenv("ARC_POST_BEAM_WIDTH", "16"))
+        self.max_grid_cells = int(os.getenv("ARC_MAX_GRID_CELLS", "1600"))
         self.enable_exact_bfs = os.getenv("ARC_ENABLE_EXACT_BFS", "0") == "1"
+        self.enable_two_stage = os.getenv("ARC_ENABLE_TWO_STAGE", "0") == "1"
         self.vllm_client = None
         self.vllm_model_name: str | None = None
         self.vllm_attempts = int(os.getenv("VLLM_ATTEMPTS", "1"))
@@ -358,6 +448,11 @@ class ARCSolver:
             return test_input
 
         candidates: list[Grid] = []
+
+        if self.enable_two_stage:
+            two_stage = self._try_solver(self._solve_by_two_stage_program, train_examples, test_input)
+            if two_stage is not None:
+                return two_stage
 
         program = self._try_solver(self._solve_by_best_program, train_examples, test_input)
         if program is not None:
@@ -450,6 +545,8 @@ class ARCSolver:
                     continue
                 if not all(valid([list(row) for row in state]) for state in next_train):
                     continue
+                if not self._states_within_limits(next_train) or not self._state_within_limits(next_test):
+                    continue
                 queue.append((next_train, next_test, program + [op.name]))
                 depth_count += 1
                 if depth_count + best_depth_states > self.max_states_per_depth:
@@ -457,6 +554,73 @@ class ARCSolver:
             best_depth_states += depth_count
             if best_depth_states > self.max_states_per_depth * self.max_search_depth:
                 break
+        return None
+
+    def _solve_by_two_stage_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        outputs = tuple(freeze(ex["output"]) for ex in examples)
+        post_ops = post_transform_ops(examples)
+
+        for base_op in base_candidate_ops():
+            try:
+                starts = tuple(freeze(base_op.func(ex["input"])) for ex in examples)
+                test_start = freeze(base_op.func(test_input))
+            except Exception:
+                continue
+            if not self._states_within_limits(starts) or not self._state_within_limits(test_start):
+                continue
+            solved = self._search_exact_program(
+                starts,
+                test_start,
+                outputs,
+                post_ops,
+                max_depth=self.post_chain_depth,
+                beam_width=self.post_beam_width,
+            )
+            if solved is not None:
+                return solved
+        return None
+
+    def _search_exact_program(
+        self,
+        starts: tuple[tuple[tuple[int, ...], ...], ...],
+        test_start: tuple[tuple[int, ...], ...],
+        outputs: tuple[tuple[tuple[int, ...], ...], ...],
+        ops: Sequence[Op],
+        *,
+        max_depth: int,
+        beam_width: int,
+    ) -> Grid | None:
+        if starts == outputs:
+            return [list(row) for row in test_start]
+
+        beam: list[tuple[float, tuple[tuple[tuple[int, ...], ...], ...], tuple[tuple[int, ...], ...]]] = [
+            (self._score_train_states(starts, outputs), starts, test_start)
+        ]
+        seen = {starts}
+
+        for _ in range(max_depth):
+            expanded: list[tuple[float, tuple[tuple[tuple[int, ...], ...], ...], tuple[tuple[int, ...], ...]]] = []
+            for _, train_states, test_state in beam:
+                for op in ops:
+                    try:
+                        next_train = tuple(
+                            freeze(op.func([list(row) for row in state])) for state in train_states
+                        )
+                        if next_train in seen:
+                            continue
+                        next_test = freeze(op.func([list(row) for row in test_state]))
+                    except Exception:
+                        continue
+                    if not self._states_within_limits(next_train) or not self._state_within_limits(next_test):
+                        continue
+                    seen.add(next_train)
+                    if next_train == outputs:
+                        return [list(row) for row in next_test]
+                    expanded.append((self._score_train_states(next_train, outputs), next_train, next_test))
+            if not expanded:
+                break
+            expanded.sort(key=lambda item: item[0], reverse=True)
+            beam = expanded[:beam_width]
         return None
 
     def _solve_by_best_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
@@ -485,10 +649,12 @@ class ARCSolver:
                         )
                         if next_train in seen:
                             continue
-                        if not all(valid([list(row) for row in state]) for state in next_train):
+                        if not self._states_within_limits(next_train):
                             continue
                         next_test = freeze(op.func([list(row) for row in test_state]))
                     except Exception:
+                        continue
+                    if not self._state_within_limits(next_test):
                         continue
 
                     seen.add(next_train)
@@ -509,6 +675,16 @@ class ARCSolver:
         if best_score <= max(start_score + 0.05, 0.58):
             return None
         return [list(row) for row in best_test]
+
+    def _states_within_limits(self, states: tuple[tuple[tuple[int, ...], ...], ...]) -> bool:
+        return all(self._state_within_limits(state) for state in states)
+
+    def _state_within_limits(self, state: tuple[tuple[int, ...], ...]) -> bool:
+        grid = [list(row) for row in state]
+        if not valid(grid):
+            return False
+        h, w = shape(grid)
+        return h * w <= self.max_grid_cells
 
     def _score_train_states(
         self,
@@ -558,6 +734,8 @@ class ARCSolver:
     def _solve_by_shape_specialist(self, examples: list[Example], test_input: Grid) -> Grid | None:
         specialists: list[Callable[[Grid], Grid]] = [
             crop_bbox,
+            keep_largest_component,
+            crop_largest_component,
             fill_rectangle_holes,
             draw_lines_between_same_color_points,
             recenter,

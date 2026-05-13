@@ -108,6 +108,67 @@ def crop_largest_component(grid: Grid) -> Grid:
     return crop_bbox(keep_largest_component(grid))
 
 
+def _largest_component_summaries(
+    grid: Grid,
+) -> list[tuple[int, int, int, int, int, int]]:
+    summaries: list[tuple[int, int, int, int, int, int]] = []
+    for comp in connected_components(grid):
+        if not comp:
+            continue
+        color = grid[comp[0][0]][comp[0][1]]
+        rows = [r for r, _ in comp]
+        cols = [c for _, c in comp]
+        summaries.append((len(comp), min(cols), min(rows), max(cols), max(rows), color))
+    if not summaries:
+        return []
+    max_size = max(size for size, *_ in summaries)
+    return [summary for summary in summaries if summary[0] == max_size]
+
+
+def largest_components_as_rows_lr(grid: Grid) -> Grid:
+    comps = sorted(_largest_component_summaries(grid), key=lambda item: (item[1], item[2]))
+    if not comps:
+        return clone(grid)
+    size = comps[0][0]
+    return [[color for _ in range(size)] for *_, color in comps]
+
+
+def largest_components_as_rows_rl(grid: Grid) -> Grid:
+    comps = sorted(_largest_component_summaries(grid), key=lambda item: (item[1], item[2]), reverse=True)
+    if not comps:
+        return clone(grid)
+    size = comps[0][0]
+    return [[color for _ in range(size)] for *_, color in comps]
+
+
+def largest_components_as_columns_lr(grid: Grid) -> Grid:
+    rows = largest_components_as_rows_lr(grid)
+    return transpose(rows)
+
+
+def largest_components_as_columns_rl(grid: Grid) -> Grid:
+    rows = largest_components_as_rows_rl(grid)
+    return transpose(rows)
+
+
+def row_diagonal_expansion(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 1 or w == 0:
+        return clone(grid)
+    row = grid[0]
+    num_colors = sum(1 for value in row if value != 0)
+    if num_colors == 0:
+        return clone(grid)
+    size = num_colors * w
+    out = [[0 for _ in range(size)] for _ in range(size)]
+    for c, color in enumerate(row):
+        if color == 0:
+            continue
+        for r in range(c, size):
+            out[r][size - 1 + c - r] = color
+    return out
+
+
 def rotate90(grid: Grid) -> Grid:
     h, w = shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
@@ -375,6 +436,7 @@ def post_transform_ops(examples: Sequence[Example]) -> list[Op]:
 def base_candidate_ops() -> list[Op]:
     return [
         Op("id", clone),
+        Op("row_diag", row_diagonal_expansion),
         Op("crop", crop_bbox),
         Op("keep_largest", keep_largest_component),
         Op("crop_largest", crop_largest_component),
@@ -382,6 +444,21 @@ def base_candidate_ops() -> list[Op]:
         Op("connect_lines", draw_lines_between_same_color_points),
         Op("recenter", recenter),
     ]
+
+
+def targeted_base_candidate_ops(
+    examples: Sequence[Example],
+    *,
+    enable_small_zoom_targets: bool = False,
+) -> list[Op]:
+    ops: list[Op] = []
+    if all(shape(ex["input"])[0] == 1 for ex in examples):
+        ops.append(Op("row_diag", row_diagonal_expansion))
+    elif enable_small_zoom_targets and all(
+        1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
+    ):
+        ops.append(Op("small_zoom3", lambda g: zoom(g, 3)))
+    return ops
 
 
 def learn_color_mapping(examples: Sequence[Example]) -> dict[int, int] | None:
@@ -435,6 +512,9 @@ class ARCSolver:
         self.beam_width = int(os.getenv("ARC_BEAM_WIDTH", "80"))
         self.post_chain_depth = int(os.getenv("ARC_POST_CHAIN_DEPTH", "7"))
         self.post_beam_width = int(os.getenv("ARC_POST_BEAM_WIDTH", "16"))
+        self.targeted_post_depth = int(os.getenv("ARC_TARGETED_POST_DEPTH", "4"))
+        self.targeted_max_states = int(os.getenv("ARC_TARGETED_MAX_STATES", "60000"))
+        self.enable_small_zoom_targets = os.getenv("ARC_ENABLE_SMALL_ZOOM_TARGETS", "0") == "1"
         self.max_grid_cells = int(os.getenv("ARC_MAX_GRID_CELLS", "1600"))
         self.enable_exact_bfs = os.getenv("ARC_ENABLE_EXACT_BFS", "0") == "1"
         self.enable_two_stage = os.getenv("ARC_ENABLE_TWO_STAGE", "0") == "1"
@@ -453,6 +533,10 @@ class ARCSolver:
             two_stage = self._try_solver(self._solve_by_two_stage_program, train_examples, test_input)
             if two_stage is not None:
                 return two_stage
+
+        targeted = self._try_solver(self._solve_by_targeted_base_program, train_examples, test_input)
+        if targeted is not None:
+            return targeted
 
         program = self._try_solver(self._solve_by_best_program, train_examples, test_input)
         if program is not None:
@@ -580,6 +664,38 @@ class ARCSolver:
                 return solved
         return None
 
+    def _solve_by_targeted_base_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        base_ops = targeted_base_candidate_ops(
+            examples,
+            enable_small_zoom_targets=self.enable_small_zoom_targets,
+        )
+        if not base_ops:
+            return None
+        outputs = tuple(freeze(ex["output"]) for ex in examples)
+        post_ops = post_transform_ops(examples)
+
+        for base_op in base_ops:
+            try:
+                starts = tuple(freeze(base_op.func(ex["input"])) for ex in examples)
+                test_start = freeze(base_op.func(test_input))
+            except Exception:
+                continue
+            if starts == tuple(freeze(ex["input"]) for ex in examples):
+                continue
+            if not self._states_within_limits(starts) or not self._state_within_limits(test_start):
+                continue
+            solved = self._search_exact_program_bfs(
+                starts,
+                test_start,
+                outputs,
+                post_ops,
+                max_depth=min(self.post_chain_depth, self.targeted_post_depth),
+                max_states=self.targeted_max_states,
+            )
+            if solved is not None:
+                return solved
+        return None
+
     def _search_exact_program(
         self,
         starts: tuple[tuple[tuple[int, ...], ...], ...],
@@ -621,6 +737,46 @@ class ARCSolver:
                 break
             expanded.sort(key=lambda item: item[0], reverse=True)
             beam = expanded[:beam_width]
+        return None
+
+    def _search_exact_program_bfs(
+        self,
+        starts: tuple[tuple[tuple[int, ...], ...], ...],
+        test_start: tuple[tuple[int, ...], ...],
+        outputs: tuple[tuple[tuple[int, ...], ...], ...],
+        ops: Sequence[Op],
+        *,
+        max_depth: int,
+        max_states: int,
+    ) -> Grid | None:
+        if starts == outputs:
+            return [list(row) for row in test_start]
+
+        queue = deque([(starts, test_start, 0)])
+        seen = {starts}
+
+        while queue and len(seen) < max_states:
+            train_states, test_state, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+            for op in ops:
+                try:
+                    next_train = tuple(
+                        freeze(op.func([list(row) for row in state])) for state in train_states
+                    )
+                    if next_train in seen:
+                        continue
+                    next_test = freeze(op.func([list(row) for row in test_state]))
+                except Exception:
+                    continue
+                if not self._states_within_limits(next_train) or not self._state_within_limits(next_test):
+                    continue
+                seen.add(next_train)
+                if next_train == outputs:
+                    return [list(row) for row in next_test]
+                if len(seen) >= max_states:
+                    break
+                queue.append((next_train, next_test, depth + 1))
         return None
 
     def _solve_by_best_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
@@ -736,6 +892,11 @@ class ARCSolver:
             crop_bbox,
             keep_largest_component,
             crop_largest_component,
+            largest_components_as_rows_lr,
+            largest_components_as_rows_rl,
+            largest_components_as_columns_lr,
+            largest_components_as_columns_rl,
+            row_diagonal_expansion,
             fill_rectangle_holes,
             draw_lines_between_same_color_points,
             recenter,

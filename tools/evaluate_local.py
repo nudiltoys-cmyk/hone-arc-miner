@@ -49,7 +49,30 @@ def _generate_problem(
     raise RuntimeError("could not generate a valid problem")
 
 
-def evaluate(n: int, seed: int, chain_min: int, chain_max: int) -> dict[str, Any]:
+def _chain_names(chain: list[dict[str, Any]] | None) -> list[str]:
+    if not chain:
+        return []
+    return [str(step.get("name", "")) for step in chain if isinstance(step, dict)]
+
+
+def _count_values(values: list[Any]) -> list[dict[str, Any]]:
+    counts: dict[Any, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return [
+        {"value": value, "count": count}
+        for value, count in sorted(counts.items(), key=lambda item: (-item[1], str(item[0])))
+    ]
+
+
+def evaluate(
+    n: int,
+    seed: int,
+    chain_min: int,
+    chain_max: int,
+    *,
+    include_grids: bool = False,
+) -> dict[str, Any]:
     random.seed(seed)
     generator = ARC2Generator(seed=seed)
     storage = DatasetStorage(Path("/tmp/hone_arc_miner_eval"))
@@ -70,24 +93,35 @@ def evaluate(n: int, seed: int, chain_min: int, chain_max: int) -> dict[str, Any
             problem["test_output"],
             problem.get("metadata", {}),
         )
-        rows.append(
-            {
-                "index": index,
-                "task_hash": problem["task_hash"],
-                "base_task": problem["metadata"].get("base_task"),
-                "chain": problem["metadata"].get("transformation_chain"),
-                "chain_length": problem["metadata"].get("chain_length"),
-                "exact_match": metrics["exact_match"],
-                "partial_correctness": metrics["partial_correctness"],
-                "grid_similarity": metrics["grid_similarity"],
-                "shape_match": metrics["shape_match"],
-                "predicted_shape": metrics["predicted_shape"],
-                "expected_shape": metrics["expected_shape"],
-            }
-        )
+        chain = problem["metadata"].get("transformation_chain")
+        row = {
+            "index": index,
+            "task_hash": problem["task_hash"],
+            "base_task": problem["metadata"].get("base_task"),
+            "chain": chain,
+            "chain_names": _chain_names(chain),
+            "chain_length": problem["metadata"].get("chain_length"),
+            "exact_match": metrics["exact_match"],
+            "partial_correctness": metrics["partial_correctness"],
+            "grid_similarity": metrics["grid_similarity"],
+            "shape_match": metrics["shape_match"],
+            "predicted_shape": metrics["predicted_shape"],
+            "expected_shape": metrics["expected_shape"],
+        }
+        if include_grids:
+            row.update(
+                {
+                    "train_examples": problem["train_examples"],
+                    "test_input": problem["test_input"],
+                    "expected_output": problem["test_output"],
+                    "predicted_output": predicted,
+                }
+            )
+        rows.append(row)
 
     exact = sum(1 for row in rows if row["exact_match"])
     shape_matches = sum(1 for row in rows if row["shape_match"])
+    misses = [row for row in rows if not row["exact_match"]]
     elapsed = time.time() - start
     return {
         "n": n,
@@ -100,6 +134,15 @@ def evaluate(n: int, seed: int, chain_min: int, chain_max: int) -> dict[str, Any
         "avg_partial_correctness": sum(row["partial_correctness"] for row in rows) / n if n else 0.0,
         "avg_grid_similarity": sum(row["grid_similarity"] for row in rows) / n if n else 0.0,
         "elapsed_s": elapsed,
+        "miss_summary": {
+            "by_base_task": _count_values([row["base_task"] for row in misses]),
+            "by_first_transform": _count_values(
+                [row["chain_names"][0] if row["chain_names"] else "" for row in misses]
+            ),
+            "by_last_transform": _count_values(
+                [row["chain_names"][-1] if row["chain_names"] else "" for row in misses]
+            ),
+        },
         "rows": rows,
     }
 
@@ -110,10 +153,17 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--chain-min", type=int, default=3)
     parser.add_argument("--chain-max", type=int, default=7)
+    parser.add_argument("--include-grids", action="store_true")
     parser.add_argument("--json-out", type=str, default="")
     args = parser.parse_args()
 
-    report = evaluate(args.n, args.seed, args.chain_min, args.chain_max)
+    report = evaluate(
+        args.n,
+        args.seed,
+        args.chain_min,
+        args.chain_max,
+        include_grids=args.include_grids,
+    )
     print(
         "exact={exact_matches}/{n} ({exact_match_rate:.3f}) "
         "shape={shape_match_rate:.3f} partial={avg_partial_correctness:.3f} "
@@ -126,6 +176,9 @@ def main() -> int:
             "shape={predicted_shape}->{expected_shape} partial={partial_correctness:.3f} "
             "chain={chain}".format(**row)
         )
+    print(f"miss base tasks: {report['miss_summary']['by_base_task'][:8]}")
+    print(f"miss first transforms: {report['miss_summary']['by_first_transform'][:8]}")
+    print(f"miss last transforms: {report['miss_summary']['by_last_transform'][:8]}")
 
     if args.json_out:
         path = Path(args.json_out)

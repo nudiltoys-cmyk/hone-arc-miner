@@ -169,6 +169,63 @@ def row_diagonal_expansion(grid: Grid) -> Grid:
     return out
 
 
+def _component_rect(comp: list[tuple[int, int]]) -> tuple[int, int, int, int] | None:
+    if not comp:
+        return None
+    rows = [r for r, _ in comp]
+    cols = [c for _, c in comp]
+    r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+    if len(comp) != (r1 - r0 + 1) * (c1 - c0 + 1):
+        return None
+    return r0, r1, c0, c1
+
+
+def extract_symmetric_cutout(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 6 or w < 6:
+        return clone(grid)
+
+    candidates: list[tuple[int, Grid]] = []
+    for comp in connected_components(grid, background=-1):
+        rect = _component_rect(comp)
+        if rect is None:
+            continue
+        r0, r1, c0, c1 = rect
+        area = len(comp)
+        if area < 4 or area >= (h * w) // 3:
+            continue
+        cutout = grid[comp[0][0]][comp[0][1]]
+        recovered: Grid = []
+        ok = True
+        for r in range(r0, r1 + 1):
+            row: list[int] = []
+            for c in range(c0, c1 + 1):
+                mirrors = [
+                    (h - 1 - r, c),
+                    (r, w - 1 - c),
+                    (h - 1 - r, w - 1 - c),
+                ]
+                vals = [
+                    grid[mr][mc]
+                    for mr, mc in mirrors
+                    if not (r0 <= mr <= r1 and c0 <= mc <= c1)
+                ]
+                if not vals or len(set(vals)) != 1 or vals[0] == cutout:
+                    ok = False
+                    break
+                row.append(vals[0])
+            if not ok:
+                break
+            recovered.append(row)
+        if ok and len(nonzero_colors(recovered)) >= 2:
+            candidates.append((area, recovered))
+
+    if not candidates:
+        return clone(grid)
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
 def rotate90(grid: Grid) -> Grid:
     h, w = shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
@@ -454,6 +511,8 @@ def targeted_base_candidate_ops(
     ops: list[Op] = []
     if all(shape(ex["input"])[0] == 1 for ex in examples):
         ops.append(Op("row_diag", row_diagonal_expansion))
+    elif all(shape(ex["input"]) != shape(extract_symmetric_cutout(ex["input"])) for ex in examples):
+        ops.append(Op("sym_cutout", extract_symmetric_cutout))
     elif enable_small_zoom_targets and all(
         1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
     ):
@@ -692,6 +751,15 @@ class ARCSolver:
                 max_depth=min(self.post_chain_depth, self.targeted_post_depth),
                 max_states=self.targeted_max_states,
             )
+            if solved is None and base_op.name == "sym_cutout":
+                solved = self._search_exact_program(
+                    starts,
+                    test_start,
+                    outputs,
+                    post_ops,
+                    max_depth=self.post_chain_depth,
+                    beam_width=max(self.post_beam_width, 32),
+                )
             if solved is not None:
                 return solved
         return None

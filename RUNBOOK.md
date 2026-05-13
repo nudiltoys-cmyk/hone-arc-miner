@@ -79,6 +79,12 @@ Current safe default result from 2026-05-13:
 exact=5/30 (0.167) shape=0.900 partial=0.795 grid=0.685 elapsed=69.0s
 ```
 
+Current cross-seed smoke from 2026-05-13:
+
+```text
+exact=3/20 (0.150) shape=0.800 partial=0.729 grid=0.627 elapsed=69.4s
+```
+
 Useful diagnostic mode:
 
 ```bash

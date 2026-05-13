@@ -34,7 +34,7 @@ Latest local checks on 2026-05-13:
 - Safe default: `python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7`
   - `exact=5/30`, `shape=0.900`, `partial=0.795`, `grid=0.685`, `elapsed=69.0s`.
 - Cross-seed smoke: `python3 tools/evaluate_local.py --n 20 --seed 11 --chain-min 3 --chain-max 7`
-  - `exact=1/20`, `shape=0.800`, `partial=0.668`, `grid=0.539`, `elapsed=66.4s`.
+  - `exact=3/20`, `shape=0.800`, `partial=0.729`, `grid=0.627`, `elapsed=69.4s`.
 
 Keep these deterministic solver flags off by default unless benchmarking says otherwise:
 

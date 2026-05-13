@@ -736,6 +736,62 @@ def green_pair_cyan_caps(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def sparse_cell_zoom3(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 3 or w != 3:
+        return clone(grid)
+    nonzero = sum(1 for row in grid for value in row if value != 0)
+    if not (4 <= nonzero <= 5):
+        return clone(grid)
+    return zoom(grid, 3)
+
+
+def macro_grid_pair_interpolate(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 8 or w != 8:
+        return clone(grid)
+    if any(grid[r][c] != 0 for r in (2, 5) for c in range(w)):
+        return clone(grid)
+    if any(grid[r][c] != 0 for c in (2, 5) for r in range(h)):
+        return clone(grid)
+
+    marks: list[tuple[int, int, int, int, int]] = []
+    for r in range(h):
+        if r in {2, 5}:
+            continue
+        for c in range(w):
+            if c in {2, 5}:
+                continue
+            value = grid[r][c]
+            if value in {0, 1}:
+                continue
+            mr, mc = r // 3, c // 3
+            roff, coff = r % 3, c % 3
+            if roff > 1 or coff > 1:
+                continue
+            marks.append((mr, mc, roff, coff, value))
+
+    out = clone(grid)
+    changed = False
+    for i, a in enumerate(marks):
+        ar, ac, aroff, acoff, avalue = a
+        for br, bc, broff, bcoff, bvalue in marks[i + 1 :]:
+            if (aroff, acoff, avalue) != (broff, bcoff, bvalue):
+                continue
+            if ar == br and abs(ac - bc) == 2:
+                rr = 3 * ar + aroff
+                cc = 3 * 1 + acoff
+            elif ac == bc and abs(ar - br) == 2:
+                rr = 3 * 1 + aroff
+                cc = 3 * ac + acoff
+            else:
+                continue
+            if out[rr][cc] != avalue:
+                out[rr][cc] = avalue
+                changed = True
+    return out if changed else clone(grid)
+
+
 def rotate90(grid: Grid) -> Grid:
     h, w = shape(grid)
     return [[grid[h - 1 - r][c] for r in range(h)] for c in range(w)]
@@ -1092,10 +1148,16 @@ def targeted_base_candidate_ops(
         ops.append(Op("two_point_crosses", two_point_crosses))
     elif all(ex["input"] != corner_voronoi_parity(ex["input"]) for ex in examples):
         ops.append(Op("corner_voronoi", corner_voronoi_parity))
+    elif all(shape(ex["input"]) != shape(sparse_cell_zoom3(ex["input"])) for ex in examples):
+        ops.append(Op("sparse_zoom3", sparse_cell_zoom3))
+    elif all(ex["input"] != blue_flood_zero_regions(ex["input"]) for ex in examples):
+        ops.append(Op("blue_flood", blue_flood_zero_regions))
     elif all(shape(ex["input"]) != shape(quadrant_column_projection(ex["input"])) for ex in examples):
         ops.append(Op("quadrant_columns", quadrant_column_projection))
     elif all(ex["input"] != green_pair_cyan_caps(ex["input"]) for ex in examples):
         ops.append(Op("green_caps", green_pair_cyan_caps))
+    elif all(ex["input"] != macro_grid_pair_interpolate(ex["input"]) for ex in examples):
+        ops.append(Op("macro_interp", macro_grid_pair_interpolate))
     elif enable_small_zoom_targets and all(
         1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
     ):
@@ -1363,6 +1425,8 @@ class ARCSolver:
                 "corner_voronoi",
                 "quadrant_columns",
                 "green_caps",
+                "sparse_zoom3",
+                "macro_interp",
             }
             if base_op.name == "replicate_quadrants" and not same_train_shapes:
                 beam_fallback_names.remove("replicate_quadrants")

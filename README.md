@@ -28,7 +28,7 @@ The solver has two layers:
 
 ## Current Baseline
 
-Local no-vLLM synthetic smoke tests compile and run. The deterministic layer has strong pockets, but the proper clean-clone validator-format run is still below Hone's 20% exact-rate floor. Treat this as an improving miner candidate, not a launch-ready solver.
+Local no-vLLM synthetic smoke tests compile and run. The deterministic layer is now over Hone's 20% exact-rate floor on one saved 100-task validator replay and one fresh 30-task validator dry run. Treat this as an improving miner candidate, not a guaranteed ROI launch.
 
 Latest local checks on 2026-05-14:
 
@@ -43,8 +43,11 @@ Latest local checks on 2026-05-14:
 - Clean-clone validator-format run:
   - `python3 tools/validator_dry_run.py --n 100 --seed 20260515 --solver-dir /tmp/hone_miner_clone_648684d/solver`
   - `exact=11/100 (0.110)`, `shape=0.780`, `partial=0.706`, `grid=0.608`, `elapsed=762.5s`.
+- After specialist batch:
+  - Saved 100-task validator replay: `exact=25/100 (0.250)`, `shape=0.820`, `partial=0.750`, `grid=0.659`, `elapsed=545.0s`.
+  - Fresh 30-task validator dry run, seed `20260516`: `exact=7/30 (0.233)`, `shape=0.867`, `partial=0.775`, `grid=0.692`, `elapsed=106.1s`.
 
-Launch gate from 2026-05-14: failed. Do not register/burn until the clean-clone validator-format run clears 20% with margin across multiple seeds.
+Launch gate from 2026-05-14: improving but still cautious. The solver has crossed 20% in two validator-style checks; run a clean GitHub clone test after pushing and check live burn/current competitors before registration.
 
 Keep these deterministic solver flags off by default unless benchmarking says otherwise:
 

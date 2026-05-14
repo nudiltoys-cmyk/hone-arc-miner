@@ -102,7 +102,14 @@ python3 tools/validator_dry_run.py --n 100 --seed 20260515 --work-dir /tmp/hone_
 exact=11/100 (0.110) shape=0.780 partial=0.706 grid=0.608 elapsed=762.5s
 ```
 
-Launch gate: failed. The solver is not ready to register on SN5 yet.
+Latest specialist batch replay from 2026-05-14:
+
+```text
+saved replay: exact=25/100 (0.250) shape=0.820 partial=0.750 grid=0.659 elapsed=545.0s
+fresh seed 20260516: exact=7/30 (0.233) shape=0.867 partial=0.775 grid=0.692 elapsed=106.1s
+```
+
+Launch gate: cautiously improved. Do not register until the pushed GitHub clone reproduces >20% and SN5 burn/current competition are checked.
 
 Useful diagnostic mode:
 

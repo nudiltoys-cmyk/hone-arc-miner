@@ -964,6 +964,182 @@ def green_pair_cyan_caps(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def shift_green_creature_to_redline(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 4 or w < 4 or 2 not in colors(grid) or 3 not in colors(grid):
+        return clone(grid)
+
+    red_cols = [c for c in range(w) if all(grid[r][c] == 2 for r in range(h))]
+    red_rows = [r for r, row in enumerate(grid) if all(value == 2 for value in row)]
+    if len(red_cols) == 1 and not red_rows:
+        to_canonical: Callable[[Grid], Grid] = clone
+        from_canonical: Callable[[Grid], Grid] = clone
+    elif len(red_rows) == 1 and not red_cols:
+        to_canonical = transpose
+        from_canonical = transpose
+    else:
+        return clone(grid)
+
+    candidate = to_canonical(grid)
+    ch, cw = shape(candidate)
+    red_cols = [c for c in range(cw) if all(candidate[r][c] == 2 for r in range(ch))]
+    if len(red_cols) != 1:
+        return clone(grid)
+    red_col = red_cols[0]
+    green = [(r, c) for r, row in enumerate(candidate) for c, value in enumerate(row) if value == 3]
+    if len(green) < 4:
+        return clone(grid)
+    r0, r1 = min(r for r, _ in green), max(r for r, _ in green)
+    c0, c1 = min(c for _, c in green), max(c for _, c in green)
+    sprite_h, sprite_w = r1 - r0 + 1, c1 - c0 + 1
+    if sprite_h < 2 or sprite_h > ch or sprite_w < 2 or sprite_w >= cw:
+        return clone(grid)
+
+    center = (c0 + c1) / 2
+    side = -1 if center < red_col else 1
+    if side < 0:
+        new_c0 = red_col - sprite_w
+        cyan_col = new_c0 - 1
+    else:
+        new_c0 = red_col + 1
+        cyan_col = new_c0 + sprite_w
+    if new_c0 < 0 or new_c0 + sprite_w > cw or cyan_col < 0 or cyan_col >= cw:
+        return clone(grid)
+
+    out = [[0 for _ in range(cw)] for _ in range(ch)]
+    for r in range(ch):
+        out[r][red_col] = 2
+        out[r][cyan_col] = 8
+    for r, c in green:
+        out[r][new_c0 + c - c0] = 3
+    result = from_canonical(out)
+    return result if result != grid else clone(grid)
+
+
+def extract_hidden_magnified_sprite(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 12 or w < 12:
+        return clone(grid)
+    bg = dominant_color(grid)
+    palette = sorted(nonzero_colors(grid) | ({bg} if bg != 0 else set()))
+    active_colors = [c for c in palette if c != bg]
+    if len(active_colors) < 3:
+        return clone(grid)
+
+    def components_for_color(color: int) -> list[list[tuple[int, int]]]:
+        seen: set[tuple[int, int]] = set()
+        comps: list[list[tuple[int, int]]] = []
+        for sr in range(h):
+            for sc in range(w):
+                if grid[sr][sc] != color or (sr, sc) in seen:
+                    continue
+                stack = [(sr, sc)]
+                seen.add((sr, sc))
+                comp: list[tuple[int, int]] = []
+                while stack:
+                    r, c = stack.pop()
+                    comp.append((r, c))
+                    for nr in range(r - 1, r + 2):
+                        for nc in range(c - 1, c + 2):
+                            if (
+                                0 <= nr < h
+                                and 0 <= nc < w
+                                and (nr, nc) not in seen
+                                and grid[nr][nc] == color
+                            ):
+                                seen.add((nr, nc))
+                                stack.append((nr, nc))
+                comps.append(comp)
+        return comps
+
+    small_components: list[tuple[int, int, int, int, int, list[tuple[int, int]]]] = []
+    for color in active_colors:
+        for comp in components_for_color(color):
+            r0, r1 = min(r for r, _ in comp), max(r for r, _ in comp)
+            c0, c1 = min(c for _, c in comp), max(c for _, c in comp)
+            bh, bw = r1 - r0 + 1, c1 - c0 + 1
+            if 3 <= bh <= 5 and 3 <= bw <= 5 and len(comp) >= max(4, (bh * bw) // 3):
+                small_components.append((color, r0, r1, c0, c1, comp))
+    if not small_components:
+        return clone(grid)
+
+    best: tuple[int, Grid] | None = None
+    for color, r0, r1, c0, c1, comp in small_components:
+        sprite_h, sprite_w = r1 - r0 + 1, c1 - c0 + 1
+        sprite = [[bg for _ in range(sprite_w)] for _ in range(sprite_h)]
+        for r, c in comp:
+            sprite[r - r0][c - c0] = color
+        sprite_cells = {(r - r0, c - c0) for r, c in comp}
+        for magcolor in active_colors:
+            if magcolor == color:
+                continue
+            mag_pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == magcolor]
+            if len(mag_pts) < len(comp):
+                continue
+            for off_r in range(-2 * sprite_h, h + 1):
+                for off_c in range(-2 * sprite_w, w + 1):
+                    visible_expected = 0
+                    visible_match = 0
+                    hidden_expected = 0
+                    ok = True
+                    for sr in range(sprite_h):
+                        for sc in range(sprite_w):
+                            for dr in (0, 1):
+                                for dc in (0, 1):
+                                    rr, cc = off_r + 2 * sr + dr, off_c + 2 * sc + dc
+                                    if (sr, sc) in sprite_cells:
+                                        if 0 <= rr < h and 0 <= cc < w:
+                                            visible_expected += 1
+                                            if grid[rr][cc] == magcolor:
+                                                visible_match += 1
+                                            elif grid[rr][cc] != bg:
+                                                ok = False
+                                                break
+                                        else:
+                                            hidden_expected += 1
+                                    elif 0 <= rr < h and 0 <= cc < w and grid[rr][cc] == magcolor:
+                                        ok = False
+                                        break
+                                if not ok:
+                                    break
+                            if not ok:
+                                break
+                        if not ok:
+                            break
+                    if not ok or hidden_expected == 0 or visible_expected == 0:
+                        continue
+                    if visible_match != visible_expected:
+                        continue
+                    if visible_match != sum(
+                        1
+                        for rr, cc in mag_pts
+                        if off_r <= rr < off_r + 2 * sprite_h and off_c <= cc < off_c + 2 * sprite_w
+                    ):
+                        continue
+                    score = 100 * visible_match + hidden_expected
+                    if visible_match >= max(4, len(comp)) and (best is None or score > best[0]):
+                        best = (score, sprite)
+    if best is None:
+        return clone(grid)
+    return best[1]
+
+
+def could_be_hidden_magnified_sprite(grid: Grid) -> bool:
+    h, w = shape(grid)
+    if h < 12 or w < 12 or h > 20 or w > 20:
+        return False
+    counts = color_counts(grid)
+    if not counts:
+        return False
+    bg, bg_count = counts.most_common(1)[0]
+    active = [color for color in counts if color != bg]
+    if len(active) < 3:
+        return False
+    if bg_count < (h * w) // 2:
+        return False
+    return any(4 <= counts[color] <= 40 for color in active) and any(counts[color] >= 4 for color in active)
+
+
 def sparse_cell_zoom3(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != 3 or w != 3:
@@ -1584,12 +1760,18 @@ def targeted_base_candidate_ops(
     ops: list[Op] = []
     if all(shape(ex["input"])[0] == 1 for ex in examples):
         ops.append(Op("row_diag", row_diagonal_expansion))
+    elif all(could_be_hidden_magnified_sprite(ex["input"]) for ex in examples) and all(
+        shape(ex["input"]) != shape(extract_hidden_magnified_sprite(ex["input"])) for ex in examples
+    ):
+        ops.append(Op("hidden_sprite", extract_hidden_magnified_sprite))
     elif all(shape(ex["input"]) != shape(extract_symmetric_cutout(ex["input"])) for ex in examples):
         ops.append(Op("sym_cutout", extract_symmetric_cutout))
     elif all(looks_like_permeable_linegrid(ex["input"]) for ex in examples) and all(
         ex["input"] != permeable_linegrid_fill(ex["input"]) for ex in examples
     ):
         ops.append(Op("linegrid_fill", permeable_linegrid_fill))
+    elif all(ex["input"] != shift_green_creature_to_redline(ex["input"]) for ex in examples):
+        ops.append(Op("redline_creature", shift_green_creature_to_redline))
     elif all(ex["input"] != mark_zero_straightaways_red(ex["input"]) for ex in examples):
         ops.append(Op("red_straightaways", mark_zero_straightaways_red))
     elif all(ex["input"] != fill_cyan_center_cross(ex["input"]) for ex in examples):
@@ -1608,7 +1790,9 @@ def targeted_base_candidate_ops(
         ops.append(Op("extend_rows_right", extend_periodic_rows_right))
     elif all(shape(ex["input"]) != shape(odd_cells_to_blocks4(ex["input"])) for ex in examples):
         ops.append(Op("odd_blocks4", odd_cells_to_blocks4))
-    elif all(ex["input"] != macro_grid_pair_interpolate(ex["input"]) for ex in examples):
+    elif any(ex["input"] != macro_grid_pair_interpolate(ex["input"]) for ex in examples) and all(
+        shape(ex["input"]) == shape(macro_grid_pair_interpolate(ex["input"])) for ex in examples
+    ):
         ops.append(Op("macro_interp", macro_grid_pair_interpolate))
     elif all(shape(ex["input"]) == (8, 8) for ex in examples) and all(
         ex["input"] != complete_same_color_spans(ex["input"]) for ex in examples
@@ -1927,6 +2111,20 @@ class ARCSolver:
         def remove_op(c: int) -> Op:
             return Op(f"remove_{c}", lambda g, x=c: remove_color(g, x))
 
+        def keep_op(c: int) -> Op:
+            return Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x))
+
+        def remove_test_extra_op() -> Op:
+            train_colors = output_palette
+
+            def remove_extra(grid: Grid) -> Grid:
+                extras = sorted(c for c in nonzero_colors(grid) if c not in train_colors)
+                if len(extras) != 1:
+                    return clone(grid)
+                return remove_color(grid, extras[0])
+
+            return Op("remove_test_extra", remove_extra)
+
         op = {
             "rot90": Op("rot90", rotate90),
             "rot180": Op("rot180", rotate180),
@@ -1955,6 +2153,11 @@ class ARCSolver:
             [op["anti_diag"]],
         ]
         gravities = [op["grav_down"], op["grav_up"], op["grav_left"], op["grav_right"]]
+        shift_ops = [
+            Op(f"shift_{direction}_{amount}", lambda g, d=direction, a=amount: shift(g, d, a))
+            for direction in ("up", "down", "left", "right")
+            for amount in (1, 2, 3)
+        ]
         swaps = (
             [[]]
             + [[swap_gen_op(a, b)] for a, b in combinations(palette, 2)]
@@ -2019,6 +2222,66 @@ class ARCSolver:
                 )
             return programs
 
+        if base_name == "macro_interp":
+            for first_gravity in gravities:
+                for second_gravity in gravities:
+                    for third_gravity in gravities:
+                        for orient in orientations:
+                            programs.append(
+                                [op["recenter"], op["zoom2"], first_gravity, op["recenter"]]
+                                + [second_gravity, third_gravity]
+                                + orient
+                            )
+            return programs
+
+        if base_name == "redline_creature":
+            for first_orient in orientations:
+                for first_gravity in gravities:
+                    for second_gravity in gravities:
+                        for second_orient in orientations:
+                            for final_gravity in gravities:
+                                programs.append(
+                                    first_orient
+                                    + [first_gravity, second_gravity, op["recenter"]]
+                                    + second_orient
+                                    + [op["recenter"], final_gravity]
+                                )
+            return programs
+
+        if base_name == "sparse_zoom3":
+            if any(
+                shape([list(row) for row in start]) != shape([list(row) for row in output])
+                for start, output in zip(starts, outputs)
+            ):
+                return []
+            highlight_colors = sorted((output_palette - {0, 5}) | ({8} if 8 in start_palette else set()))
+            if not highlight_colors:
+                highlight_colors = sorted(output_palette - {0}) or palette
+            for swap in swaps:
+                for gravity_op in gravities:
+                    for color in highlight_colors:
+                        for first_shift in shift_ops:
+                            for second_shift in shift_ops:
+                                programs.append(
+                                    swap
+                                    + [
+                                        gravity_op,
+                                        keep_op(color),
+                                        first_shift,
+                                        op["rot180"],
+                                        second_shift,
+                                        op["anti_diag"],
+                                    ]
+                                )
+            return programs
+
+        if base_name == "extend_rows_right":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            for turn in turns:
+                programs.append([remove_test_extra_op()] + turn)
+                programs.append(turn)
+            return programs
+
         return []
 
     def _same_or_rotated_downsampled_shapes(
@@ -2080,7 +2343,9 @@ class ARCSolver:
             beam_first_names = {
                 "alternating_rays",
                 "gray_container",
+                "hidden_sprite",
                 "red_straightaways",
+                "redline_creature",
                 "pinwheel_source",
                 "row_patterns",
             }
@@ -2089,7 +2354,9 @@ class ARCSolver:
                 "sym_cutout",
                 "cyan_cross_fill",
                 "dirty_quilt",
+                "hidden_sprite",
                 "red_straightaways",
+                "redline_creature",
                 "framed_pair",
                 "pinwheel_source",
                 "extend_rows_right",

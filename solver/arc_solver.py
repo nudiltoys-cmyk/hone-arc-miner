@@ -1295,6 +1295,10 @@ def downsample2(grid: Grid) -> Grid:
     return [[grid[r * 2][c * 2] for c in range(w // 2)] for r in range(h // 2)]
 
 
+def downsample4(grid: Grid) -> Grid:
+    return downsample2(downsample2(grid))
+
+
 def gravity(grid: Grid, direction: str) -> Grid:
     h, w = shape(grid)
     out = [[0 for _ in range(w)] for _ in range(h)]
@@ -1854,6 +1858,185 @@ class ARCSolver:
                 return solved
         return None
 
+    def _try_priority_post_programs(
+        self,
+        base_name: str,
+        starts: tuple[tuple[tuple[int, ...], ...], ...],
+        test_start: tuple[tuple[int, ...], ...],
+        outputs: tuple[tuple[tuple[int, ...], ...], ...],
+    ) -> Grid | None:
+        for program in self._priority_post_programs(base_name, starts, outputs):
+            train_states = starts
+            ok = True
+            for op in program:
+                try:
+                    train_states = tuple(
+                        freeze(op.func([list(row) for row in state])) for state in train_states
+                    )
+                except Exception:
+                    ok = False
+                    break
+                if not self._states_within_limits(train_states):
+                    ok = False
+                    break
+            if not ok or train_states != outputs:
+                continue
+
+            test_state = test_start
+            for op in program:
+                try:
+                    test_state = freeze(op.func([list(row) for row in test_state]))
+                except Exception:
+                    ok = False
+                    break
+                if not self._state_within_limits(test_state):
+                    ok = False
+                    break
+            if ok:
+                return [list(row) for row in test_state]
+        return None
+
+    def _priority_post_programs(
+        self,
+        base_name: str,
+        starts: tuple[tuple[tuple[int, ...], ...], ...],
+        outputs: tuple[tuple[tuple[int, ...], ...], ...],
+    ) -> list[list[Op]]:
+        start_palette = {
+            value
+            for state in starts
+            for row in state
+            for value in row
+            if 1 <= value <= 9
+        }
+        output_palette = {
+            value
+            for state in outputs
+            for row in state
+            for value in row
+            if 1 <= value <= 9
+        }
+        palette = sorted(start_palette | output_palette)
+
+        def swap_op(a: int, b: int) -> Op:
+            return Op(f"swap_{a}_{b}", lambda g, x=a, y=b: swap_colors(g, x, y))
+
+        def swap_gen_op(a: int, b: int) -> Op:
+            return Op(f"swap_gen_{a}_{b}", lambda g, x=a, y=b: swap_colors_generator(g, x, y))
+
+        def remove_op(c: int) -> Op:
+            return Op(f"remove_{c}", lambda g, x=c: remove_color(g, x))
+
+        op = {
+            "rot90": Op("rot90", rotate90),
+            "rot180": Op("rot180", rotate180),
+            "rot270": Op("rot270", rotate270),
+            "flip_h": Op("flip_h", flip_h),
+            "flip_v": Op("flip_v", flip_v),
+            "transpose": Op("transpose", transpose),
+            "anti_diag": Op("anti_diag", flip_antidiagonal),
+            "recenter": Op("recenter", recenter),
+            "zoom2": Op("zoom2", lambda g: zoom(g, 2)),
+            "downsample2": Op("downsample2", downsample2),
+            "downsample4": Op("downsample4", downsample4),
+            "grav_down": Op("grav_down", lambda g: gravity(g, "down")),
+            "grav_up": Op("grav_up", lambda g: gravity(g, "up")),
+            "grav_left": Op("grav_left", lambda g: gravity(g, "left")),
+            "grav_right": Op("grav_right", lambda g: gravity(g, "right")),
+        }
+        orientations = [
+            [],
+            [op["rot90"]],
+            [op["rot180"]],
+            [op["rot270"]],
+            [op["flip_h"]],
+            [op["flip_v"]],
+            [op["transpose"]],
+            [op["anti_diag"]],
+        ]
+        gravities = [op["grav_down"], op["grav_up"], op["grav_left"], op["grav_right"]]
+        swaps = (
+            [[]]
+            + [[swap_gen_op(a, b)] for a, b in combinations(palette, 2)]
+            + [[swap_op(a, b)] for a, b in combinations(palette, 2)]
+        )
+        programs: list[list[Op]] = []
+
+        if base_name == "red_blue_frame":
+            pre_orients = [[], [op["rot180"]], [op["rot90"]], [op["rot270"]]]
+            diag_orients = [[], [op["transpose"]], [op["anti_diag"]]]
+            for pre in pre_orients:
+                for diag in diag_orients:
+                    for first_gravity in gravities:
+                        for second_gravity in gravities:
+                            programs.append(
+                                pre
+                                + diag
+                                + [op["downsample2"], first_gravity, second_gravity, op["zoom2"]]
+                            )
+            return programs
+
+        if base_name == "odd_blocks4":
+            likely_removed = sorted(start_palette - output_palette)
+            color_pairs: list[tuple[int, int]] = []
+            source_colors = likely_removed if len(likely_removed) >= 2 else palette
+            for a, b in combinations(source_colors, 2):
+                color_pairs.append((a, b))
+                color_pairs.append((b, a))
+            tails = [
+                [],
+                [op["rot180"]],
+                [op["transpose"]],
+                [op["anti_diag"]],
+                [op["rot180"], op["transpose"]],
+                [op["rot180"], op["anti_diag"]],
+                [op["transpose"], op["rot180"]],
+                [op["anti_diag"], op["rot180"]],
+            ]
+            for head in orientations:
+                for center in ([], [op["recenter"]]):
+                    for gravity_op in gravities:
+                        for a, b in color_pairs:
+                            for tail in tails:
+                                programs.append(head + center + [gravity_op, remove_op(a), remove_op(b)] + tail)
+            return programs
+
+        if base_name == "periodic_repair":
+            heads = [[op["downsample4"]], [op["downsample2"], op["downsample2"]]]
+            for head in heads:
+                for orient_a in orientations:
+                    for swap in swaps:
+                        for orient_b in orientations:
+                            programs.append(head + orient_a + swap + orient_b)
+            return programs
+
+        if base_name == "replicate_quadrants":
+            for swap in swaps:
+                programs.append(
+                    [op["downsample2"]]
+                    + swap
+                    + [op["transpose"], op["anti_diag"], op["zoom2"], op["downsample2"]]
+                )
+            return programs
+
+        return []
+
+    def _same_or_rotated_downsampled_shapes(
+        self,
+        starts: tuple[tuple[tuple[int, ...], ...], ...],
+        outputs: tuple[tuple[tuple[int, ...], ...], ...],
+    ) -> bool:
+        return all(
+            sorted(shape([list(row) for row in output]))
+            == sorted(
+                (
+                    shape([list(row) for row in start])[0] // 2,
+                    shape([list(row) for row in start])[1] // 2,
+                )
+            )
+            for start, output in zip(starts, outputs)
+        )
+
     def _solve_by_targeted_base_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
         base_ops = targeted_base_candidate_ops(
             examples,
@@ -1876,8 +2059,6 @@ class ARCSolver:
                 continue
             if starts == input_starts:
                 continue
-            if base_op.name == "periodic_repair" and starts != outputs:
-                continue
             if not self._states_within_limits(starts) or not self._state_within_limits(test_start):
                 continue
             post_ops = filter_post_ops_for_shapes(post_ops, starts, outputs)
@@ -1885,7 +2066,16 @@ class ARCSolver:
                 shape([list(row) for row in start]) == shape([list(row) for row in output])
                 for start, output in zip(starts, outputs)
             )
-            if base_op.name == "replicate_quadrants" and not same_train_shapes:
+            solved = self._try_priority_post_programs(base_op.name, starts, test_start, outputs)
+            if solved is not None:
+                return solved
+            if base_op.name == "periodic_repair" and starts != outputs:
+                continue
+            if (
+                base_op.name == "replicate_quadrants"
+                and not same_train_shapes
+                and not self._same_or_rotated_downsampled_shapes(starts, outputs)
+            ):
                 continue
             beam_first_names = {
                 "alternating_rays",
@@ -1929,8 +2119,8 @@ class ARCSolver:
                     outputs,
                     post_ops,
                     max_depth=self.post_chain_depth,
-                beam_width=max(self.post_beam_width, 32),
-            )
+                    beam_width=max(self.post_beam_width, 32),
+                )
             if solved is None:
                 bfs_depth = min(self.post_chain_depth, self.targeted_post_depth)
                 bfs_states = self.targeted_max_states

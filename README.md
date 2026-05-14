@@ -29,12 +29,12 @@ The solver has two layers:
 
 Local no-vLLM synthetic smoke tests compile and run. The deterministic layer is now clearing the rough Hone exact-rate floor on the validator-style dry run, but should still be treated as an improving miner candidate rather than a finished solver.
 
-Latest local checks on 2026-05-13:
+Latest local checks on 2026-05-14:
 
 - Safe default: `python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7`
-  - `exact=9/30`, `shape=0.900`, `partial=0.820`, `grid=0.729`, `elapsed=108.8s`.
+  - `exact=9/30`, `shape=0.900`, `partial=0.820`, `grid=0.729`, `elapsed=97.3s`.
 - Cross-seed smoke: `python3 tools/evaluate_local.py --n 20 --seed 11 --chain-min 3 --chain-max 7`
-  - `exact=11/20`, `shape=0.900`, `partial=0.854`, `grid=0.791`, `elapsed=64.8s`.
+  - `exact=15/20`, `shape=0.950`, `partial=0.934`, `grid=0.903`, `elapsed=33.9s`.
 - Saved validator-style dry run: `/tmp/hone_validator_dry_input`
   - `exact=13/20`, `shape=0.900`, `partial=0.810`, `grid=0.756`.
 

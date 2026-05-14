@@ -73,19 +73,19 @@ Use the safe default first:
 python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7 --json-out /tmp/hone_default_n30.json
 ```
 
-Current safe default result from 2026-05-13:
+Current safe default result from 2026-05-14:
 
 ```text
-exact=9/30 (0.300) shape=0.900 partial=0.820 grid=0.729 elapsed=108.8s
+exact=9/30 (0.300) shape=0.900 partial=0.820 grid=0.729 elapsed=97.3s
 ```
 
-Current cross-seed smoke from 2026-05-13:
+Current cross-seed smoke from 2026-05-14:
 
 ```text
-exact=11/20 (0.550) shape=0.900 partial=0.854 grid=0.791 elapsed=64.8s
+exact=15/20 (0.750) shape=0.950 partial=0.934 grid=0.903 elapsed=33.9s
 ```
 
-Latest saved validator-style dry run from 2026-05-13:
+Latest saved validator-style dry run from 2026-05-14:
 
 ```text
 exact=13/20 (0.650) shape=0.900 partial=0.810 grid=0.756

@@ -20,7 +20,7 @@ The solver has two layers:
 ## Next Steps
 
 1. Iterate locally with `python3 tools/evaluate_local.py --n 20 --seed 7`.
-2. Recheck with `python3 tools/validator_dry_run.py --n 100 --seed 20260515 --solver-dir /tmp/hone_miner_clone_648684d/solver`.
+2. Recheck with `python3 tools/validator_dry_run.py --n 100 --seed 20260515 --solver-dir /tmp/hone_miner_clone_<commit>/solver`.
 3. Push this repository to GitHub once the validator-style dry run is comfortably over floor.
 4. Deploy `miner-server/` on a cheap VPS or serverless container with `MINER_REPO_URL` set.
 5. Register on SN5 only after the clean-clone dry run clears the 20% floor with margin and current burn is acceptable.
@@ -43,11 +43,11 @@ Latest local checks on 2026-05-14:
 - Clean-clone validator-format run:
   - `python3 tools/validator_dry_run.py --n 100 --seed 20260515 --solver-dir /tmp/hone_miner_clone_648684d/solver`
   - `exact=11/100 (0.110)`, `shape=0.780`, `partial=0.706`, `grid=0.608`, `elapsed=762.5s`.
-- After specialist batch:
-  - Saved 100-task validator replay: `exact=25/100 (0.250)`, `shape=0.820`, `partial=0.750`, `grid=0.659`, `elapsed=545.0s`.
-  - Fresh 30-task validator dry run, seed `20260516`: `exact=7/30 (0.233)`, `shape=0.867`, `partial=0.775`, `grid=0.692`, `elapsed=106.1s`.
+- After second specialist batch:
+  - Saved 100-task validator replay, seed `20260515`: `exact=30/100 (0.300)`, `shape=0.820`, `partial=0.753`, `grid=0.664`, `elapsed=650.7s`.
+  - Fresh 30-task validator dry run, seed `20260516`: `exact=12/30 (0.400)`, `shape=0.867`, `partial=0.789`, `grid=0.713`, `elapsed=101.7s`.
 
-Launch gate from 2026-05-14: improving but still cautious. The solver has crossed 20% in two validator-style checks; run a clean GitHub clone test after pushing and check live burn/current competitors before registration.
+Launch gate from 2026-05-14: improving but still cautious. The solver has crossed 30% on the saved 100-task replay and 40% on one fresh 30-task validator dry run; run a clean GitHub clone test after pushing and check live burn/current competitors before registration.
 
 Keep these deterministic solver flags off by default unless benchmarking says otherwise:
 

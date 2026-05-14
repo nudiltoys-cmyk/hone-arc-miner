@@ -105,11 +105,11 @@ exact=11/100 (0.110) shape=0.780 partial=0.706 grid=0.608 elapsed=762.5s
 Latest specialist batch replay from 2026-05-14:
 
 ```text
-saved replay: exact=25/100 (0.250) shape=0.820 partial=0.750 grid=0.659 elapsed=545.0s
-fresh seed 20260516: exact=7/30 (0.233) shape=0.867 partial=0.775 grid=0.692 elapsed=106.1s
+saved seed 20260515 replay: exact=30/100 (0.300) shape=0.820 partial=0.753 grid=0.664 elapsed=650.7s
+fresh seed 20260516 validator dry run: exact=12/30 (0.400) shape=0.867 partial=0.789 grid=0.713 elapsed=101.7s
 ```
 
-Launch gate: cautiously improved. Do not register until the pushed GitHub clone reproduces >20% and SN5 burn/current competition are checked.
+Launch gate: cautiously improved. Do not register until the pushed GitHub clone reproduces >20% with margin and SN5 burn/current competition are checked.
 
 Useful diagnostic mode:
 

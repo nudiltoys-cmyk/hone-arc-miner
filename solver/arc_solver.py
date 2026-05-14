@@ -1205,6 +1205,30 @@ def fill_blue_zero_holes(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def fill_red_box_blue_rings(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 8 or h > 12 or not nonzero_colors(grid) <= {2}:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for height in range(4, 7):
+        for width in range(4, 7):
+            for r0 in range(0, h - height + 1):
+                for c0 in range(0, w - width + 1):
+                    r1, c1 = r0 + height - 1, c0 + width - 1
+                    if any(grid[r0][c] != 2 or grid[r1][c] != 2 for c in range(c0, c1 + 1)):
+                        continue
+                    if any(grid[r][c0] != 2 or grid[r][c1] != 2 for r in range(r0, r1 + 1)):
+                        continue
+                    for r in range(r0 + 1, r1):
+                        for c in range(c0 + 1, c1):
+                            if out[r][c] == 0:
+                                out[r][c] = 1
+                                changed = True
+    return out if changed else clone(grid)
+
+
 def recover_rebound_diagonal(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != w or h < 6 or 2 not in colors(grid) or 8 not in colors(grid):
@@ -1342,6 +1366,149 @@ def recolor_boxed_sprite_copies(grid: Grid) -> Grid:
             for r, c in comp:
                 out[r][c] = color
                 changed = True
+    return out if changed else clone(grid)
+
+
+def restore_missing_cutout_boxes(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 10 or 0 not in colors(grid):
+        return clone(grid)
+
+    framed: list[tuple[int, int, int]] = []
+    for height in range(2, 6):
+        for width in range(2, 6):
+            if height == 2 and width == 2:
+                continue
+            for r0 in range(1, h - height):
+                for c0 in range(1, w - width):
+                    if any(grid[r][c] != 0 for r in range(r0, r0 + height) for c in range(c0, c0 + width)):
+                        continue
+                    border = []
+                    for c in range(c0 - 1, c0 + width + 1):
+                        border.append(grid[r0 - 1][c])
+                        border.append(grid[r0 + height][c])
+                    for r in range(r0, r0 + height):
+                        border.append(grid[r][c0 - 1])
+                        border.append(grid[r][c0 + width])
+                    if len(set(border)) == 1 and border[0] != 0:
+                        framed.append((height, width, border[0]))
+    if not framed:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for height, width, boxcolor in sorted(set(framed)):
+        for r0 in range(1, h - height):
+            for c0 in range(1, w - width):
+                if any(grid[r][c] != 0 for r in range(r0, r0 + height) for c in range(c0, c0 + width)):
+                    continue
+                border_coords = (
+                    [(r0 - 1, c) for c in range(c0 - 1, c0 + width + 1)]
+                    + [(r0 + height, c) for c in range(c0 - 1, c0 + width + 1)]
+                    + [(r, c0 - 1) for r in range(r0, r0 + height)]
+                    + [(r, c0 + width) for r in range(r0, r0 + height)]
+                )
+                if all(grid[r][c] == boxcolor for r, c in border_coords):
+                    continue
+                for r, c in border_coords:
+                    if out[r][c] != boxcolor:
+                        out[r][c] = boxcolor
+                        changed = True
+    return out if changed else clone(grid)
+
+
+def colored_dots_to_mapped_blocks(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 6 or h > 16:
+        return clone(grid)
+    mapping = {2: 1, 3: 6, 8: 4}
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if not pts or any(value not in mapping for _, _, value in pts):
+        return clone(grid)
+    if any(r in {0, h - 1} or c in {0, w - 1} for r, c, _ in pts):
+        return clone(grid)
+    for i, (r1, c1, _) in enumerate(pts):
+        for r2, c2, _ in pts[i + 1 :]:
+            if abs(r1 - r2) <= 2 and abs(c1 - c2) <= 2:
+                return clone(grid)
+
+    out = clone(grid)
+    for r, c, value in pts:
+        fill = mapping[value]
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                out[r + dr][c + dc] = fill
+        out[r][c] = value
+    return out if out != grid else clone(grid)
+
+
+def align_color_clusters_to_first_row(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if w != 10 or h not in {5, 10} or not nonzero_colors(grid) <= {1, 2, 4}:
+        return clone(grid)
+    comps_by_color: dict[int, list[tuple[int, int]]] = {}
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value != 0:
+                comps_by_color.setdefault(value, []).append((r, c))
+    if set(comps_by_color) != {1, 2, 4}:
+        return clone(grid)
+
+    signatures: set[frozenset[tuple[int, int]]] = set()
+    boxes: dict[int, tuple[int, int, int, int]] = {}
+    for color, pts in comps_by_color.items():
+        r0, r1 = min(r for r, _ in pts), max(r for r, _ in pts)
+        c0, c1 = min(c for _, c in pts), max(c for _, c in pts)
+        if r1 - r0 > 2 or c1 - c0 > 3:
+            return clone(grid)
+        signature = frozenset((r - r0, c - c0) for r, c in pts)
+        signatures.add(signature)
+        boxes[color] = (r0, r1, c0, c1)
+    if len(signatures) != 1:
+        return clone(grid)
+
+    target_r = boxes[1][0]
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    changed = False
+    for color, pts in comps_by_color.items():
+        r0 = boxes[color][0]
+        for r, c in pts:
+            rr = target_r + (r - r0)
+            if not (0 <= rr < h):
+                return clone(grid)
+            out[rr][c] = color
+            if rr != r:
+                changed = True
+    return out if changed else clone(grid)
+
+
+def stack_red_columns_under_blue(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h != 10 or not nonzero_colors(grid) <= {1, 2} or 2 not in colors(grid):
+        return clone(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    changed = False
+    active_cols = 0
+    for c in range(w):
+        blue_rows = [r for r in range(h) if grid[r][c] == 1]
+        red_rows = [r for r in range(h) if grid[r][c] == 2]
+        if not blue_rows and not red_rows:
+            continue
+        active_cols += 1
+        if blue_rows != list(range(len(blue_rows))):
+            return clone(grid)
+        if red_rows and red_rows != list(range(h - len(red_rows), h)):
+            return clone(grid)
+        if len(blue_rows) + len(red_rows) > h:
+            return clone(grid)
+        for r in range(len(blue_rows)):
+            out[r][c] = 1
+        for r in range(len(blue_rows), len(blue_rows) + len(red_rows)):
+            out[r][c] = 2
+        if red_rows and red_rows[0] != len(blue_rows):
+            changed = True
+    if active_cols < 2:
+        return clone(grid)
     return out if changed else clone(grid)
 
 
@@ -1755,6 +1922,119 @@ def extract_pinwheel_source(grid: Grid) -> Grid:
             if ok and reconstructed == grid and len(nonzero_colors(out)) >= 2:
                 return out
     return clone(grid)
+
+
+def complete_pinwheel_quadrants(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 10 or w != 10:
+        return clone(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if not (3 <= len(pts) <= 40):
+        return clone(grid)
+
+    def positions(row: int, col: int, bump: int, rr: int, cc: int) -> list[tuple[int, int]]:
+        return [
+            (row + rr + bump, col + cc),
+            (row - cc, col + rr),
+            (row + cc + bump, col - rr - bump),
+            (row - rr, col - cc - bump),
+        ]
+
+    input_values = {(r, c): value for r, c, value in pts}
+    input_cells = set(input_values)
+    best: tuple[int, Grid] | None = None
+    for row in range(h):
+        for col in range(w):
+            for bump in (0, 1):
+                for length in range(2, 5):
+                    specs: list[tuple[bool, list[tuple[frozenset[tuple[int, int]], int | None]]]] = []
+                    ok = True
+                    for cc in range(length):
+                        for rr in range(cc + 1):
+                            coords = positions(row, col, bump, rr, cc)
+                            if any(not (0 <= r < h and 0 <= c < w) for r, c in coords):
+                                ok = False
+                                break
+                            mandatory = rr <= 1 and cc <= 1
+                            all_quadrants = rr < 1 and cc < 1 if length == 2 else rr < 2 and cc < 2
+                            visible_sets = [frozenset(coords)] if all_quadrants else [frozenset({coord}) for coord in coords]
+                            choices: list[tuple[frozenset[tuple[int, int]], int | None]] = []
+                            if not mandatory:
+                                choices.append((frozenset(), None))
+                            for visible in visible_sets:
+                                if not visible or not visible <= input_cells:
+                                    continue
+                                vals = {input_values[cell] for cell in visible}
+                                if len(vals) == 1:
+                                    choices.append((visible, vals.pop()))
+                            if not choices or (mandatory and all(not visible for visible, _ in choices)):
+                                ok = False
+                                break
+                            specs.append((mandatory, choices))
+                        if not ok:
+                            break
+                    if not ok:
+                        continue
+
+                    source_order = [(rr, cc) for cc in range(length) for rr in range(cc + 1)]
+                    selections: list[tuple[bool, frozenset[tuple[int, int]], int | None]] = []
+
+                    def emit_candidate() -> None:
+                        nonlocal best
+                        if not all(selections):
+                            return
+                        out = [[0 for _ in range(w)] for _ in range(h)]
+                        included = 0
+                        for (rr, cc), (_, _, color) in zip(source_order, selections):
+                            if color is None:
+                                continue
+                            included += 1
+                            for r, c in positions(row, col, bump, rr, cc):
+                                out[r][c] = color
+                        if out == grid:
+                            return
+                        if any(out[r][c] != value for r, c, value in pts):
+                            return
+                        filled = sum(1 for out_row in out for value in out_row if value != 0)
+                        changed = sum(1 for r in range(h) for c in range(w) if out[r][c] != grid[r][c])
+                        score = (
+                            len(pts) * 10000
+                            + changed * 100
+                            - filled * 3
+                            - included
+                            - length
+                            - abs(row - h // 2)
+                            - abs(col - w // 2)
+                            - bump
+                        )
+                        if best is None or score > best[0]:
+                            best = (score, out)
+
+                    def search(idx: int, covered: frozenset[tuple[int, int]]) -> None:
+                        if idx == len(specs):
+                            if covered == input_cells:
+                                emit_candidate()
+                            return
+                        mandatory, choices = specs[idx]
+                        remaining: set[tuple[int, int]] = set()
+                        for _, later_choices in specs[idx + 1 :]:
+                            for visible, _ in later_choices:
+                                remaining |= set(visible)
+                        if not input_cells <= set(covered) | remaining | {
+                            cell for visible, _ in choices for cell in visible
+                        }:
+                            return
+                        for visible, color in choices:
+                            if color is None and mandatory:
+                                continue
+                            if color is not None and visible <= covered and not mandatory:
+                                continue
+                            selections.append((mandatory, visible, color))
+                            search(idx + 1, frozenset(set(covered) | set(visible)))
+                            selections.pop()
+
+                    search(0, frozenset())
+    return best[1] if best else clone(grid)
 
 
 def extend_periodic_rows_right(grid: Grid) -> Grid:
@@ -2173,6 +2453,8 @@ def targeted_base_candidate_ops(
         for ex in examples
     ):
         ops.append(Op("linegrid_extract", extract_flipped_linegrid_bitmap))
+    elif all(ex["input"] != fill_red_box_blue_rings(ex["input"]) for ex in examples):
+        ops.append(Op("red_box_blue_rings", fill_red_box_blue_rings))
     elif all(ex["input"] != fill_blue_zero_holes(ex["input"]) for ex in examples):
         ops.append(Op("blue_holes", fill_blue_zero_holes))
     elif all(ex["input"] != copy_colored_sprite_to_gray_rectangles(ex["input"]) for ex in examples):
@@ -2181,6 +2463,14 @@ def targeted_base_candidate_ops(
         ops.append(Op("cyan_window", cyan_window_blue_to_green))
     elif all(ex["input"] != recolor_boxed_sprite_copies(ex["input"]) for ex in examples):
         ops.append(Op("boxed_sprite_recolor", recolor_boxed_sprite_copies))
+    elif all(ex["input"] != restore_missing_cutout_boxes(ex["input"]) for ex in examples):
+        ops.append(Op("missing_box_frame", restore_missing_cutout_boxes))
+    elif all(ex["input"] != colored_dots_to_mapped_blocks(ex["input"]) for ex in examples):
+        ops.append(Op("mapped_dot_blocks", colored_dots_to_mapped_blocks))
+    elif all(ex["input"] != align_color_clusters_to_first_row(ex["input"]) for ex in examples):
+        ops.append(Op("align_color_clusters", align_color_clusters_to_first_row))
+    elif all(ex["input"] != stack_red_columns_under_blue(ex["input"]) for ex in examples):
+        ops.append(Op("red_columns_up", stack_red_columns_under_blue))
     elif all(
         shape(ex["input"]) == (10, 10)
         and shape(ex["input"]) != shape(largest_components_as_columns_lr(ex["input"]))
@@ -2225,6 +2515,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("framed_pair", extract_framed_pair_sprite))
     elif all(shape(ex["input"]) != shape(extract_pinwheel_source(ex["input"])) for ex in examples):
         ops.append(Op("pinwheel_source", extract_pinwheel_source))
+    elif all(ex["input"] != complete_pinwheel_quadrants(ex["input"]) for ex in examples):
+        ops.append(Op("pinwheel_complete", complete_pinwheel_quadrants))
     elif all(shape(ex["input"]) != shape(extend_periodic_rows_right(ex["input"])) for ex in examples):
         ops.append(Op("extend_rows_right", extend_periodic_rows_right))
     elif all(shape(ex["input"]) != shape(odd_cells_to_blocks4(ex["input"])) for ex in examples):
@@ -2678,6 +2970,101 @@ class ARCSolver:
                                 )
             return programs
 
+        if base_name == "missing_box_frame":
+            preferred_orientations = [
+                [op["transpose"]],
+                [op["anti_diag"]],
+                [op["rot90"]],
+                [op["rot270"]],
+                [],
+                [op["rot180"]],
+                [op["flip_h"]],
+                [op["flip_v"]],
+            ]
+            preferred_gravities = [op["grav_right"], op["grav_left"], op["grav_up"], op["grav_down"]]
+            removals = (
+                [[remove_test_extra_op()]]
+                + [[remove_op(c)] for c in sorted(start_palette | output_palette)]
+                + [[remove_op(c)] for c in range(1, 10) if c not in start_palette | output_palette]
+                + [[]]
+            )
+            for orient_a in preferred_orientations:
+                for first_gravity in preferred_gravities:
+                    for repeats in (1, 2):
+                        gravity_head = [first_gravity] * repeats
+                        for removal in removals:
+                            for final_gravity in preferred_gravities:
+                                for orient_b in preferred_orientations:
+                                    programs.append(orient_a + gravity_head + removal + [final_gravity] + orient_b)
+            for orient_a in preferred_orientations:
+                for removal in removals:
+                    for orient_b in preferred_orientations:
+                        programs.append(orient_a + removal + orient_b)
+            return programs
+
+        if base_name == "pinwheel_complete":
+            color_steps = swaps + [[remove_test_extra_op()]] + [[remove_op(c)] for c in sorted(start_palette | output_palette)]
+            preferred_orientations = [
+                [op["rot270"]],
+                [op["transpose"]],
+                [op["rot90"]],
+                [op["rot180"]],
+                [op["anti_diag"]],
+                [],
+                [op["flip_h"]],
+                [op["flip_v"]],
+            ]
+            preferred_gravities = [op["grav_down"], op["grav_right"], op["grav_left"], op["grav_up"]]
+            for orient in preferred_orientations:
+                for color_step in color_steps:
+                    programs.append(orient + color_step)
+                    for first_gravity in preferred_gravities:
+                        for second_gravity in preferred_gravities:
+                            for third_gravity in preferred_gravities:
+                                programs.append(orient + color_step + [first_gravity, second_gravity, third_gravity])
+            return programs
+
+        if base_name == "mapped_dot_blocks":
+            preferred_orientations = [[op["transpose"]], [op["anti_diag"]], [op["rot90"]], [op["rot270"]], [], [op["rot180"]]]
+            for first_gravity in gravities:
+                for orient in preferred_orientations:
+                    for second_gravity in gravities:
+                        programs.append([first_gravity] + orient + [second_gravity])
+            for orient in preferred_orientations:
+                for first_gravity in gravities:
+                    for second_gravity in gravities:
+                        programs.append(orient + [first_gravity, second_gravity])
+            return programs
+
+        if base_name == "red_columns_up":
+            preferred_orientations = [[op["rot180"]], [op["rot90"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]], []]
+            for orient in preferred_orientations:
+                for gravity_op in gravities:
+                    programs.append(orient + [gravity_op, op["downsample2"]])
+                    programs.append([gravity_op] + orient + [op["downsample2"]])
+            return programs
+
+        if base_name == "align_color_clusters":
+            preferred_orientations = [[op["rot90"]], [op["rot270"]], [op["rot180"]], [op["transpose"]], [op["anti_diag"]], []]
+            for gravity_op in gravities:
+                for center in ([], [op["recenter"]]):
+                    for orient in preferred_orientations:
+                        for shift_op in shift_ops:
+                            programs.append([gravity_op] + center + orient + [shift_op])
+            return programs
+
+        if base_name == "red_box_blue_rings":
+            for orient_a in orientations:
+                for gravity_part in ([[]] + [[gravity_op] for gravity_op in gravities]):
+                    for orient_b in orientations:
+                        programs.append(orient_a + gravity_part + orient_b)
+            for orient_a in orientations:
+                for center in ([], [op["recenter"]]):
+                    for orient_b in orientations:
+                        for zoom_part in ([], [op["zoom2"]], [op["zoom3"]]):
+                            programs.append(orient_a + center + orient_b + zoom_part)
+            return programs
+
         if base_name == "odd_blocks4":
             likely_removed = sorted(start_palette - output_palette)
             color_pairs: list[tuple[int, int]] = []
@@ -2704,6 +3091,11 @@ class ARCSolver:
             return programs
 
         if base_name == "periodic_repair":
+            for shift_op in shift_ops:
+                for orient_a in orientations:
+                    for orient_b in orientations:
+                        programs.append([shift_op] + orient_a + orient_b)
+                        programs.append(orient_a + [shift_op] + orient_b)
             heads = [[op["downsample4"]], [op["downsample2"], op["downsample2"]]]
             for head in heads:
                 for orient_a in orientations:
@@ -2875,14 +3267,20 @@ class ARCSolver:
                 "rebound_diag",
                 "blast_radius",
                 "linegrid_extract",
+                "red_box_blue_rings",
                 "blue_holes",
                 "gray_sprite_copy",
                 "cyan_window",
                 "boxed_sprite_recolor",
+                "missing_box_frame",
+                "mapped_dot_blocks",
+                "align_color_clusters",
+                "red_columns_up",
                 "largest_columns",
                 "largest_rows",
                 "gray_panels",
                 "pinwheel_source",
+                "pinwheel_complete",
                 "row_patterns",
             }
             shallow_search_names = {"odd_blocks4", "periodic_repair", "red_blue_frame"}
@@ -2896,15 +3294,21 @@ class ARCSolver:
                 "rebound_diag",
                 "blast_radius",
                 "linegrid_extract",
+                "red_box_blue_rings",
                 "blue_holes",
                 "gray_sprite_copy",
                 "cyan_window",
                 "boxed_sprite_recolor",
+                "missing_box_frame",
+                "mapped_dot_blocks",
+                "align_color_clusters",
+                "red_columns_up",
                 "largest_columns",
                 "largest_rows",
                 "gray_panels",
                 "framed_pair",
                 "pinwheel_source",
+                "pinwheel_complete",
                 "extend_rows_right",
                 "corner_triads",
                 "punchcards",

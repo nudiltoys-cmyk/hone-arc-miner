@@ -1016,6 +1016,29 @@ def shift_green_creature_to_redline(grid: Grid) -> Grid:
     return result if result != grid else clone(grid)
 
 
+def fill_gray_rotated_panels(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 2 or w != 3 * h + 2 or 5 not in colors(grid):
+        return clone(grid)
+    if any(grid[r][h] != 5 or grid[r][2 * h + 1] != 5 for r in range(h)):
+        return clone(grid)
+    if any(grid[r][c] != 0 for r in range(h) for c in range(h + 1, 2 * h + 1)):
+        return clone(grid)
+    if any(grid[r][c] != 0 for r in range(h) for c in range(2 * h + 2, 3 * h + 2)):
+        return clone(grid)
+    tile = [row[:h] for row in grid]
+    if any(0 in row or 5 in row for row in tile):
+        return clone(grid)
+    out = clone(grid)
+    mid = rotate90(tile)
+    right = rotate180(tile)
+    for r in range(h):
+        for c in range(h):
+            out[r][h + 1 + c] = mid[r][c]
+            out[r][2 * h + 2 + c] = right[r][c]
+    return out if out != grid else clone(grid)
+
+
 def extract_hidden_magnified_sprite(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 12 or w < 12:
@@ -1138,6 +1161,80 @@ def could_be_hidden_magnified_sprite(grid: Grid) -> bool:
     if bg_count < (h * w) // 2:
         return False
     return any(4 <= counts[color] <= 40 for color in active) and any(counts[color] >= 4 for color in active)
+
+
+def restore_green_zero_arteries(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h != 30 or 3 in colors(grid) or 0 not in colors(grid):
+        return clone(grid)
+    if len(nonzero_colors(grid)) != 1:
+        return clone(grid)
+
+    candidates: list[tuple[int, int, int, int, int]] = []
+    for r0 in range(h):
+        zero_cols = [True] * w
+        for r1 in range(r0, h):
+            for c in range(w):
+                zero_cols[c] = zero_cols[c] and grid[r1][c] == 0
+            c = 0
+            while c < w:
+                if not zero_cols[c]:
+                    c += 1
+                    continue
+                c0 = c
+                while c < w and zero_cols[c]:
+                    c += 1
+                c1 = c - 1
+                height = r1 - r0 + 1
+                width = c1 - c0 + 1
+                area = height * width
+                if area < 24:
+                    continue
+                if (height >= 12 and width >= 3) or (width >= 12 and height >= 3):
+                    candidates.append((area, r0, r1, c0, c1))
+
+    maximal: list[tuple[int, int, int, int, int]] = []
+    for area, r0, r1, c0, c1 in sorted(candidates, reverse=True):
+        contained = False
+        for _, ar0, ar1, ac0, ac1 in maximal:
+            if ar0 <= r0 <= r1 <= ar1 and ac0 <= c0 <= c1 <= ac1:
+                contained = True
+                break
+            overlap_h = max(0, min(r1, ar1) - max(r0, ar0) + 1)
+            overlap_w = max(0, min(c1, ac1) - max(c0, ac0) + 1)
+            if overlap_h * overlap_w >= int(area * 0.70):
+                contained = True
+                break
+        if contained:
+            continue
+        can_expand_up = r0 > 0 and all(grid[r0 - 1][c] == 0 for c in range(c0, c1 + 1))
+        can_expand_down = r1 < h - 1 and all(grid[r1 + 1][c] == 0 for c in range(c0, c1 + 1))
+        can_expand_left = c0 > 0 and all(grid[r][c0 - 1] == 0 for r in range(r0, r1 + 1))
+        can_expand_right = c1 < w - 1 and all(grid[r][c1 + 1] == 0 for r in range(r0, r1 + 1))
+        if can_expand_up or can_expand_down or can_expand_left or can_expand_right:
+            continue
+        maximal.append((area, r0, r1, c0, c1))
+
+    if not maximal:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for _, r0, r1, c0, c1 in maximal:
+        fill_r0 = r0 if r0 == 0 else r0 + 1
+        fill_r1 = r1 if r1 == h - 1 else r1 - 1
+        fill_c0 = c0 if c0 == 0 else c0 + 1
+        fill_c1 = c1 if c1 == w - 1 else c1 - 1
+        if c1 - c0 + 1 <= 3 and r0 == 0 and r1 < h - 1:
+            fill_r1 = r1 - 2
+        if fill_r0 > fill_r1 or fill_c0 > fill_c1:
+            continue
+        for r in range(fill_r0, fill_r1 + 1):
+            for c in range(fill_c0, fill_c1 + 1):
+                if out[r][c] == 0:
+                    out[r][c] = 3
+                    changed = True
+    return out if changed else clone(grid)
 
 
 def sparse_cell_zoom3(grid: Grid) -> Grid:
@@ -1772,6 +1869,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("linegrid_fill", permeable_linegrid_fill))
     elif all(ex["input"] != shift_green_creature_to_redline(ex["input"]) for ex in examples):
         ops.append(Op("redline_creature", shift_green_creature_to_redline))
+    elif all(ex["input"] != fill_gray_rotated_panels(ex["input"]) for ex in examples):
+        ops.append(Op("gray_panels", fill_gray_rotated_panels))
     elif all(ex["input"] != mark_zero_straightaways_red(ex["input"]) for ex in examples):
         ops.append(Op("red_straightaways", mark_zero_straightaways_red))
     elif all(ex["input"] != fill_cyan_center_cross(ex["input"]) for ex in examples):
@@ -1828,6 +1927,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("quadrant_columns", quadrant_column_projection))
     elif all(ex["input"] != green_pair_cyan_caps(ex["input"]) for ex in examples):
         ops.append(Op("green_caps", green_pair_cyan_caps))
+    elif all(ex["input"] != restore_green_zero_arteries(ex["input"]) for ex in examples):
+        ops.append(Op("green_arteries", restore_green_zero_arteries))
     elif all(ex["input"] != alternating_rays_from_points(ex["input"]) for ex in examples):
         ops.append(Op("alternating_rays", alternating_rays_from_points))
     elif all(ex["input"] != complete_hidden_row_patterns(ex["input"]) for ex in examples):
@@ -2179,6 +2280,12 @@ class ARCSolver:
                             )
             return programs
 
+        if base_name == "row_diag":
+            for shift_op in shift_ops:
+                for gravity_op in gravities:
+                    programs.append([shift_op, gravity_op, op["downsample2"]])
+            return programs
+
         if base_name == "odd_blocks4":
             likely_removed = sorted(start_palette - output_palette)
             color_pairs: list[tuple[int, int]] = []
@@ -2246,6 +2353,28 @@ class ARCSolver:
                                     + second_orient
                                     + [op["recenter"], final_gravity]
                                 )
+            return programs
+
+        if base_name == "gray_panels":
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette)]
+            for first_gravity in gravities:
+                for shift_op in shift_ops:
+                    for second_gravity in gravities:
+                        for removal in removals:
+                            for final_gravity in gravities:
+                                programs.append(
+                                    [first_gravity, shift_op, second_gravity]
+                                    + removal
+                                    + [op["zoom2"], op["downsample2"], final_gravity]
+                                )
+            return programs
+
+        if base_name == "green_arteries":
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette)]
+            for first_gravity in gravities:
+                for removal in removals:
+                    for orient in orientations:
+                        programs.append([first_gravity] + removal + orient)
             return programs
 
         if base_name == "sparse_zoom3":
@@ -2346,6 +2475,7 @@ class ARCSolver:
                 "hidden_sprite",
                 "red_straightaways",
                 "redline_creature",
+                "gray_panels",
                 "pinwheel_source",
                 "row_patterns",
             }
@@ -2357,6 +2487,7 @@ class ARCSolver:
                 "hidden_sprite",
                 "red_straightaways",
                 "redline_creature",
+                "gray_panels",
                 "framed_pair",
                 "pinwheel_source",
                 "extend_rows_right",
@@ -2373,6 +2504,7 @@ class ARCSolver:
                 "corner_voronoi",
                 "quadrant_columns",
                 "green_caps",
+                "green_arteries",
                 "sparse_zoom3",
                 "macro_interp",
                 "alternating_rays",

@@ -32,9 +32,9 @@ Local no-vLLM synthetic smoke tests compile and run. The deterministic layer is 
 Latest local checks on 2026-05-14:
 
 - Safe default: `python3 tools/evaluate_local.py --n 30 --seed 7 --chain-min 3 --chain-max 7`
-  - `exact=11/30`, `shape=0.900`, `partial=0.828`, `grid=0.744`, `elapsed=109.2s`.
+  - `exact=12/30`, `shape=0.933`, `partial=0.854`, `grid=0.777`, `elapsed=75.9s`.
 - Cross-seed smoke: `python3 tools/evaluate_local.py --n 20 --seed 11 --chain-min 3 --chain-max 7`
-  - `exact=18/20`, `shape=1.000`, `partial=0.986`, `grid=0.971`, `elapsed=33.0s`.
+  - `exact=20/20`, `shape=1.000`, `partial=1.000`, `grid=1.000`, `elapsed=16.2s`.
 - Saved validator-style dry run: `/tmp/hone_validator_dry_input`
   - `exact=13/20`, `shape=0.900`, `partial=0.810`, `grid=0.756`.
 

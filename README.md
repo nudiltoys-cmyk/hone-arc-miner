@@ -20,14 +20,15 @@ The solver has two layers:
 ## Next Steps
 
 1. Iterate locally with `python3 tools/evaluate_local.py --n 20 --seed 7`.
-2. Push this repository to GitHub.
-3. Deploy `miner-server/` on a cheap VPS or serverless container with `MINER_REPO_URL` set.
-4. Register on SN5 once the public endpoint and repo are ready.
-5. Use validator feedback to tune model, prompt, `VLLM_ATTEMPTS`, and search caps.
+2. Recheck with `python3 tools/validator_dry_run.py --n 100 --seed 20260515 --solver-dir /tmp/hone_miner_clone_648684d/solver`.
+3. Push this repository to GitHub once the validator-style dry run is comfortably over floor.
+4. Deploy `miner-server/` on a cheap VPS or serverless container with `MINER_REPO_URL` set.
+5. Register on SN5 only after the clean-clone dry run clears the 20% floor with margin and current burn is acceptable.
+6. Use validator feedback to tune model, prompt, `VLLM_ATTEMPTS`, and search caps.
 
 ## Current Baseline
 
-Local no-vLLM synthetic smoke tests compile and run. The deterministic layer is now clearing the rough Hone exact-rate floor on the validator-style dry run, but should still be treated as an improving miner candidate rather than a finished solver.
+Local no-vLLM synthetic smoke tests compile and run. The deterministic layer has strong pockets, but the proper clean-clone validator-format run is still below Hone's 20% exact-rate floor. Treat this as an improving miner candidate, not a launch-ready solver.
 
 Latest local checks on 2026-05-14:
 
@@ -37,6 +38,13 @@ Latest local checks on 2026-05-14:
   - `exact=20/20`, `shape=1.000`, `partial=1.000`, `grid=1.000`, `elapsed=16.2s`.
 - Saved validator-style dry run: `/tmp/hone_validator_dry_input`
   - `exact=13/20`, `shape=0.900`, `partial=0.810`, `grid=0.756`.
+- Broad multi-seed generated check:
+  - `exact=46/120 (0.383)`, `shape=0.842`, `partial=0.778`, `grid=0.709`, `elapsed=898.4s`.
+- Clean-clone validator-format run:
+  - `python3 tools/validator_dry_run.py --n 100 --seed 20260515 --solver-dir /tmp/hone_miner_clone_648684d/solver`
+  - `exact=11/100 (0.110)`, `shape=0.780`, `partial=0.706`, `grid=0.608`, `elapsed=762.5s`.
+
+Launch gate from 2026-05-14: failed. Do not register/burn until the clean-clone validator-format run clears 20% with margin across multiple seeds.
 
 Keep these deterministic solver flags off by default unless benchmarking says otherwise:
 

@@ -17,7 +17,7 @@ Do not register until all of these are true:
 1. `curl https://YOUR_HOST/health` returns `{"status":"ok"}`.
 2. `curl https://YOUR_HOST/info` returns the final GitHub repo URL and hotkey.
 3. The GitHub repo is public and has the required files in `solver/`.
-4. We have run at least one validator-style sandbox job or a cheap local smoke test.
+4. A clean-clone validator-format dry run is comfortably above the 20% floor across multiple seeds.
 5. Current SN5 burn is checked and acceptable with a hard cap.
 
 ## Deploy Server
@@ -90,6 +90,19 @@ Latest saved validator-style dry run from 2026-05-14:
 ```text
 exact=13/20 (0.650) shape=0.900 partial=0.810 grid=0.756
 ```
+
+Latest proper clean-clone validator-format run from 2026-05-14:
+
+```bash
+git clone --depth 1 https://github.com/nudiltoys-cmyk/hone-arc-miner.git /tmp/hone_miner_clone_648684d
+python3 tools/validator_dry_run.py --n 100 --seed 20260515 --work-dir /tmp/hone_validator_dry_clone_n100 --solver-dir /tmp/hone_miner_clone_648684d/solver --json-out /tmp/hone_validator_dry_clone_n100.json
+```
+
+```text
+exact=11/100 (0.110) shape=0.780 partial=0.706 grid=0.608 elapsed=762.5s
+```
+
+Launch gate: failed. The solver is not ready to register on SN5 yet.
 
 Useful diagnostic mode:
 

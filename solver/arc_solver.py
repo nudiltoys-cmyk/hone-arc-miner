@@ -392,6 +392,83 @@ def mark_zero_straightaways_red(grid: Grid) -> Grid:
     return out
 
 
+def repair_periodic_cutouts(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 15 or w < 15 or 0 not in colors(grid) or len(nonzero_colors(grid)) < 2:
+        return clone(grid)
+    observed = [(r, c, grid[r][c]) for r in range(h) for c in range(w) if grid[r][c] != 0]
+    if len(observed) < (h * w) // 2:
+        return clone(grid)
+
+    periods = sorted(
+        ((pr, pc) for pr in range(2, min(10, h + 1)) for pc in range(2, w + 1)),
+        key=lambda item: (item[0] * item[1], item[1]),
+    )
+    for pr, pc in periods:
+        template: dict[tuple[int, int], int] = {}
+        ok = True
+        for r, c, value in observed:
+            key = (r % pr, c % pc)
+            if key in template and template[key] != value:
+                ok = False
+                break
+            template[key] = value
+        if not ok:
+            continue
+        out = clone(grid)
+        for r in range(h):
+            for c in range(w):
+                if out[r][c] != 0:
+                    continue
+                key = (r % pr, c % pc)
+                if key not in template:
+                    ok = False
+                    break
+                out[r][c] = template[key]
+            if not ok:
+                break
+        if ok and out != grid:
+            return out
+    return clone(grid)
+
+
+def restore_red_blue_frame(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if w != 13 or h < 8 or h > 13 or colors(grid) - {0, 1}:
+        return clone(grid)
+    pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 1]
+    if len(pts) < 10:
+        return clone(grid)
+    r0, r1 = min(r for r, _ in pts), max(r for r, _ in pts)
+    c0, c1 = min(c for _, c in pts), max(c for _, c in pts)
+    if c0 != 2 or c1 - c0 not in {6, 7, 8} or r1 - r0 not in {6, 7, 8}:
+        return clone(grid)
+
+    marks: set[tuple[int, int]] = set()
+    for r in range(r0, r1 + 1):
+        marks.add((r, c0))
+        marks.add((r, c1))
+    for c in range(c0, c1 + 1):
+        marks.add((r0, c))
+        marks.add((r1, c))
+    for r in range(r0 + 1, r1):
+        if sum(1 for c in range(c0 + 1, c1) if grid[r][c] == 1) >= 2:
+            for c in range(c0, c1 + 1):
+                marks.add((r, c))
+    for c in range(c0 + 1, c1):
+        if sum(1 for r in range(r0 + 1, r1) if grid[r][c] == 1) >= 2:
+            for r in range(r0, r1 + 1):
+                marks.add((r, c))
+
+    out = clone(grid)
+    changed = False
+    for r, c in marks:
+        if out[r][c] == 0:
+            out[r][c] = 2
+            changed = True
+    return out if changed else clone(grid)
+
+
 def extract_framed_pair_sprite(grid: Grid) -> Grid:
     h, w = shape(grid)
     yellow_pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 4]
@@ -702,6 +779,51 @@ def gray_towers_to_blue_bases(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def fill_gray_container_cyan(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h != 10 or nonzero_colors(grid) != {5}:
+        return clone(grid)
+
+    orientations = [
+        (clone, clone),
+        (transpose, transpose),
+        (flip_v, flip_v),
+        (rotate270, rotate90),
+    ]
+    for to_canonical, from_canonical in orientations:
+        candidate = to_canonical(grid)
+        gray = [(r, c) for r, row in enumerate(candidate) for c, value in enumerate(row) if value == 5]
+        if not gray:
+            continue
+        r0, r1 = min(r for r, _ in gray), max(r for r, _ in gray)
+        c0, c1 = min(c for _, c in gray), max(c for _, c in gray)
+        if r1 - r0 not in {4, 5} or c1 - c0 != 5:
+            continue
+        if r0 < 0 or r1 >= h or c0 <= 0 or c1 >= w - 1:
+            continue
+        if any(candidate[r0][c] != 5 for c in range(c0, c1 + 1)):
+            continue
+        gaps = [c for c in range(c0 + 1, c1) if candidate[r1][c] == 0]
+        if len(gaps) != 1:
+            continue
+        gap_col = gaps[0]
+        if any(c != gap_col and candidate[r1][c] != 5 for c in range(c0, c1 + 1)):
+            continue
+        if any(candidate[r][c0] != 5 or candidate[r][c1] != 5 for r in range(r0, r1 + 1)):
+            continue
+
+        out = clone(candidate)
+        for r in range(r0 + 1, r1):
+            for c in range(c0 + 1, c1):
+                out[r][c] = 8
+        for r in range(r1, h):
+            out[r][gap_col] = 8
+        result = from_canonical(out)
+        if result != grid:
+            return result
+    return clone(grid)
+
+
 def complete_partial_street(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != w or h != 6:
@@ -850,6 +972,25 @@ def sparse_cell_zoom3(grid: Grid) -> Grid:
     if not (4 <= nonzero <= 5):
         return clone(grid)
     return zoom(grid, 3)
+
+
+def odd_cells_to_blocks4(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 6 or h > 12 or h % 2:
+        return clone(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if not (4 <= len(pts) <= 8):
+        return clone(grid)
+    if any(r % 2 != 1 or c % 2 != 1 for r, c, _ in pts):
+        return clone(grid)
+    out = [[0 for _ in range(2 * w)] for _ in range(2 * h)]
+    for r, c, value in pts:
+        r0 = 2 * (r - 1)
+        c0 = 2 * (c - 1)
+        for dr in range(4):
+            for dc in range(4):
+                out[r0 + dr][c0 + dc] = value
+    return out
 
 
 def macro_grid_pair_interpolate(grid: Grid) -> Grid:
@@ -1451,12 +1592,20 @@ def targeted_base_candidate_ops(
         ops.append(Op("cyan_cross_fill", fill_cyan_center_cross))
     elif all(shape(ex["input"]) != shape(summarize_zero_separated_quilt(ex["input"])) for ex in examples):
         ops.append(Op("dirty_quilt", summarize_zero_separated_quilt))
+    elif all(ex["input"] != repair_periodic_cutouts(ex["input"]) for ex in examples):
+        ops.append(Op("periodic_repair", repair_periodic_cutouts))
+    elif all(ex["input"] != restore_red_blue_frame(ex["input"]) for ex in examples):
+        ops.append(Op("red_blue_frame", restore_red_blue_frame))
     elif all(shape(ex["input"]) != shape(extract_framed_pair_sprite(ex["input"])) for ex in examples):
         ops.append(Op("framed_pair", extract_framed_pair_sprite))
     elif all(shape(ex["input"]) != shape(extract_pinwheel_source(ex["input"])) for ex in examples):
         ops.append(Op("pinwheel_source", extract_pinwheel_source))
     elif all(shape(ex["input"]) != shape(extend_periodic_rows_right(ex["input"])) for ex in examples):
         ops.append(Op("extend_rows_right", extend_periodic_rows_right))
+    elif all(shape(ex["input"]) != shape(odd_cells_to_blocks4(ex["input"])) for ex in examples):
+        ops.append(Op("odd_blocks4", odd_cells_to_blocks4))
+    elif all(ex["input"] != macro_grid_pair_interpolate(ex["input"]) for ex in examples):
+        ops.append(Op("macro_interp", macro_grid_pair_interpolate))
     elif all(shape(ex["input"]) == (8, 8) for ex in examples) and all(
         ex["input"] != complete_same_color_spans(ex["input"]) for ex in examples
     ):
@@ -1475,6 +1624,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("cyan_zigzag", cyan_zigzag_path))
     elif all(ex["input"] != gray_towers_to_blue_bases(ex["input"]) for ex in examples):
         ops.append(Op("gray_towers", gray_towers_to_blue_bases))
+    elif all(ex["input"] != fill_gray_container_cyan(ex["input"]) for ex in examples):
+        ops.append(Op("gray_container", fill_gray_container_cyan))
     elif all(ex["input"] != complete_partial_street(ex["input"]) for ex in examples):
         ops.append(Op("partial_street", complete_partial_street))
     elif all(ex["input"] != two_point_crosses(ex["input"]) for ex in examples):
@@ -1489,8 +1640,6 @@ def targeted_base_candidate_ops(
         ops.append(Op("quadrant_columns", quadrant_column_projection))
     elif all(ex["input"] != green_pair_cyan_caps(ex["input"]) for ex in examples):
         ops.append(Op("green_caps", green_pair_cyan_caps))
-    elif all(ex["input"] != macro_grid_pair_interpolate(ex["input"]) for ex in examples):
-        ops.append(Op("macro_interp", macro_grid_pair_interpolate))
     elif all(ex["input"] != alternating_rays_from_points(ex["input"]) for ex in examples):
         ops.append(Op("alternating_rays", alternating_rays_from_points))
     elif all(ex["input"] != complete_hidden_row_patterns(ex["input"]) for ex in examples):
@@ -1727,6 +1876,8 @@ class ARCSolver:
                 continue
             if starts == input_starts:
                 continue
+            if base_op.name == "periodic_repair" and starts != outputs:
+                continue
             if not self._states_within_limits(starts) or not self._state_within_limits(test_start):
                 continue
             post_ops = filter_post_ops_for_shapes(post_ops, starts, outputs)
@@ -1736,7 +1887,14 @@ class ARCSolver:
             )
             if base_op.name == "replicate_quadrants" and not same_train_shapes:
                 continue
-            beam_first_names = {"alternating_rays", "red_straightaways", "pinwheel_source", "row_patterns"}
+            beam_first_names = {
+                "alternating_rays",
+                "gray_container",
+                "red_straightaways",
+                "pinwheel_source",
+                "row_patterns",
+            }
+            shallow_search_names = {"odd_blocks4", "periodic_repair", "red_blue_frame"}
             beam_fallback_names = {
                 "sym_cutout",
                 "cyan_cross_fill",
@@ -1752,6 +1910,7 @@ class ARCSolver:
                 "replicate_quadrants",
                 "cyan_zigzag",
                 "gray_towers",
+                "gray_container",
                 "partial_street",
                 "two_point_crosses",
                 "corner_voronoi",
@@ -1770,16 +1929,21 @@ class ARCSolver:
                     outputs,
                     post_ops,
                     max_depth=self.post_chain_depth,
-                    beam_width=max(self.post_beam_width, 32),
-                )
+                beam_width=max(self.post_beam_width, 32),
+            )
             if solved is None:
+                bfs_depth = min(self.post_chain_depth, self.targeted_post_depth)
+                bfs_states = self.targeted_max_states
+                if base_op.name in shallow_search_names:
+                    bfs_depth = min(bfs_depth, 2)
+                    bfs_states = min(bfs_states, 200)
                 solved = self._search_exact_program_bfs(
                     starts,
                     test_start,
                     outputs,
                     post_ops,
-                    max_depth=min(self.post_chain_depth, self.targeted_post_depth),
-                    max_states=self.targeted_max_states,
+                    max_depth=bfs_depth,
+                    max_states=bfs_states,
                 )
             if solved is None and (
                 base_op.name == "cyan_zigzag" or (base_op.name == "replicate_quadrants" and same_train_shapes)

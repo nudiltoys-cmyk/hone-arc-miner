@@ -1315,6 +1315,86 @@ def project_origin_shape_across_linegrid(grid: Grid) -> Grid:
     return clone(grid)
 
 
+def extract_repeated_half(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h >= 4 and h % 2 == 0:
+        top = [row[:] for row in grid[: h // 2]]
+        bottom = [row[:] for row in grid[h // 2 :]]
+        if top == bottom and any(value != 0 for row in top for value in row):
+            return top
+    if w >= 4 and w % 2 == 0:
+        left = [row[: w // 2] for row in grid]
+        right = [row[w // 2 :] for row in grid]
+        if left == right and any(value != 0 for row in left for value in row):
+            return left
+    return clone(grid)
+
+
+def extract_repeated_outer_panel(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if w >= 6 and w % 3 == 0:
+        panel_w = w // 3
+        left = [row[:panel_w] for row in grid]
+        middle = [row[panel_w : 2 * panel_w] for row in grid]
+        right = [row[2 * panel_w :] for row in grid]
+        if left == right and (middle == left or middle == left[::-1]):
+            return left
+    if h >= 6 and h % 3 == 0:
+        panel_h = h // 3
+        top = [row[:] for row in grid[:panel_h]]
+        middle = [row[:] for row in grid[panel_h : 2 * panel_h]]
+        bottom = [row[:] for row in grid[2 * panel_h :]]
+        middle_flipped = [row[::-1] for row in top]
+        if top == bottom and (middle == top or middle == middle_flipped):
+            return top
+    return clone(grid)
+
+
+def extract_noisy_box_crosses(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 12 or w < 12:
+        return clone(grid)
+    if len(colors(grid)) < 6:
+        return clone(grid)
+
+    best: tuple[int, int, int, int, int, int, Grid] | None = None
+    for tall in range(6, min(10, h - 2) + 1):
+        for wide in range(6, min(10, w - 2) + 1):
+            area = tall * wide
+            for r0 in range(1, h - tall):
+                for c0 in range(1, w - wide):
+                    vals = [grid[r][c] for r in range(r0, r0 + tall) for c in range(c0, c0 + wide)]
+                    counts = Counter(vals)
+                    box_color, box_count = counts.most_common(1)[0]
+                    marker_count = area - box_count
+                    if not (1 <= marker_count <= 3):
+                        continue
+                    markers = [
+                        (r - r0, c - c0, grid[r][c])
+                        for r in range(r0, r0 + tall)
+                        for c in range(c0, c0 + wide)
+                        if grid[r][c] != box_color
+                    ]
+                    marker_values = {value for _, _, value in markers}
+                    if len(marker_values) != 1:
+                        continue
+                    if any(r in {0, tall - 1} or c in {0, wide - 1} for r, c, _ in markers):
+                        continue
+
+                    out = [row[c0 : c0 + wide] for row in grid[r0 : r0 + tall]]
+                    for mr, mc, value in markers:
+                        for r in range(tall):
+                            out[r][mc] = value
+                        for c in range(wide):
+                            out[mr][c] = value
+                    score = area * 100 - marker_count
+                    if best is None or score > best[0]:
+                        best = (score, r0, c0, tall, wide, marker_count, out)
+    if best is None:
+        return clone(grid)
+    return best[-1]
+
+
 def complete_blast_radius(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 7 or w < 7:
@@ -2692,6 +2772,12 @@ def targeted_base_candidate_ops(
     ops: list[Op] = []
     if all(shape(ex["input"])[0] == 1 for ex in examples):
         ops.append(Op("row_diag", row_diagonal_expansion))
+    elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
+        ops.append(Op("repeated_half", extract_repeated_half))
+    elif all(shape(ex["input"]) != shape(extract_repeated_outer_panel(ex["input"])) for ex in examples):
+        ops.append(Op("repeated_outer_panel", extract_repeated_outer_panel))
+    elif all(shape(ex["input"]) != shape(extract_noisy_box_crosses(ex["input"])) for ex in examples):
+        ops.append(Op("noisy_box_crosses", extract_noisy_box_crosses))
     elif all(ex["input"] != recover_rebound_diagonal(ex["input"]) for ex in examples):
         ops.append(Op("rebound_diag", recover_rebound_diagonal))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
@@ -2905,6 +2991,10 @@ class ARCSolver:
             two_stage = self._try_solver(self._solve_by_two_stage_program, train_examples, test_input)
             if two_stage is not None:
                 return two_stage
+
+        large_zoom = self._try_solver(self._solve_by_large_zoom_program, train_examples, test_input)
+        if large_zoom is not None:
+            return large_zoom
 
         targeted = self._try_solver(self._solve_by_targeted_base_program, train_examples, test_input)
         if targeted is not None:
@@ -3535,6 +3625,46 @@ class ARCSolver:
                                 programs.append(first_gravity + center + orient_a + orient_b + swap)
             return programs
 
+        if base_name == "repeated_half":
+            likely_removed = sorted(start_palette - output_palette)
+            remaining = sorted((start_palette | output_palette | test_palette) - set(likely_removed))
+            removals = (
+                [[remove_op(c)] for c in likely_removed]
+                + [[remove_op(c)] for c in remaining]
+                + [[remove_test_extra_op()]]
+                + [[]]
+            )
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            for first_gravity in gravity_steps:
+                for orient_a in orientations:
+                    for removal_a in removals:
+                        for removal_b in removals:
+                            for orient_b in orientations:
+                                programs.append(first_gravity + orient_a + removal_a + removal_b + orient_b)
+            return programs
+
+        if base_name == "repeated_outer_panel":
+            highlights = [[]] + [[keep_op(c)] for c in sorted((start_palette | output_palette | test_palette) - {0})]
+            centers = [[], [op["recenter"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            for zoom_part in ([], [op["zoom2"]], [op["zoom3"]], [op["zoom2"], op["zoom3"]]):
+                for orient_a in orientations:
+                    for center in centers:
+                        for highlight in highlights:
+                            for gravity_part in gravity_steps:
+                                for orient_b in orientations:
+                                    programs.append(zoom_part + orient_a + center + highlight + gravity_part + orient_b)
+            return programs
+
+        if base_name == "noisy_box_crosses":
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            for scale in ([], [op["downsample2"]]):
+                for first_gravity in gravity_steps:
+                    for second_gravity in gravity_steps:
+                        for orient in orientations:
+                            programs.append(scale + first_gravity + second_gravity + orient)
+            return programs
+
         return []
 
     def _same_or_rotated_downsampled_shapes(
@@ -3552,6 +3682,92 @@ class ARCSolver:
             )
             for start, output in zip(starts, outputs)
         )
+
+    def _solve_by_large_zoom_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        def downsample_uniform(grid: Grid, factor: int) -> Grid | None:
+            h, w = shape(grid)
+            if h % factor != 0 or w % factor != 0:
+                return None
+            out: Grid = []
+            for br in range(h // factor):
+                row: list[int] = []
+                for bc in range(w // factor):
+                    vals = {
+                        grid[r][c]
+                        for r in range(br * factor, (br + 1) * factor)
+                        for c in range(bc * factor, (bc + 1) * factor)
+                    }
+                    if len(vals) != 1:
+                        return None
+                    row.append(next(iter(vals)))
+                out.append(row)
+            return out
+
+        def left_shadow_transform(grid: Grid, color1: int, color2: int) -> Grid:
+            h, w = shape(grid)
+            out = swap_colors_generator(gravity(grid, "left"), color1, color2)
+            nonzero_rows = [r for r, row in enumerate(grid) if any(value != 0 for value in row)]
+            if not nonzero_rows:
+                return out
+            top_r = min(nonzero_rows)
+            top_values = [value for value in grid[top_r] if value != 0]
+            if not top_values or len(set(top_values)) != 1:
+                return out
+            shadow_height = max(1, (h - 3) // 2)
+            shadow_width = min(2, w)
+            for r in range(max(0, top_r - shadow_height), top_r):
+                for c in range(shadow_width):
+                    out[r][c] = top_values[0]
+            return out
+
+        for factor in (6,):
+            if not all(
+                shape(ex["output"]) == (shape(ex["input"])[0] * factor, shape(ex["input"])[1] * factor)
+                for ex in examples
+            ):
+                continue
+
+            starts = [zoom(ex["input"], factor) for ex in examples]
+            test_start = zoom(test_input, factor)
+            palette = sorted(
+                {
+                    value
+                    for grid in starts + [test_start] + [ex["output"] for ex in examples]
+                    for row in grid
+                    for value in row
+                    if 1 <= value <= 9
+                }
+            )
+            gravity_options: list[str | None] = [None, "down", "up", "left", "right"]
+            swap_options: list[tuple[int, int] | None] = [None] + list(combinations(palette, 2))
+            for direction in gravity_options:
+                train_after_gravity = [gravity(grid, direction) if direction else grid for grid in starts]
+                test_after_gravity = gravity(test_start, direction) if direction else test_start
+                for swap_pair in swap_options:
+                    if swap_pair is None:
+                        train_states = train_after_gravity
+                        test_state = test_after_gravity
+                    else:
+                        a, b = swap_pair
+                        train_states = [swap_colors(grid, a, b) for grid in train_after_gravity]
+                        test_state = swap_colors(test_after_gravity, a, b)
+                    if all(state == ex["output"] for state, ex in zip(train_states, examples)):
+                        return test_state
+
+            output_smalls = [downsample_uniform(ex["output"], factor) for ex in examples]
+            if all(output is not None for output in output_smalls):
+                expected_smalls = [output for output in output_smalls if output is not None]
+                for color1 in range(10):
+                    for color2 in range(10):
+                        if color1 == color2:
+                            continue
+                        train_smalls = [
+                            left_shadow_transform(ex["input"], color1, color2)
+                            for ex in examples
+                        ]
+                        if train_smalls == expected_smalls:
+                            return zoom(left_shadow_transform(test_input, color1, color2), factor)
+        return None
 
     def _solve_by_targeted_base_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
         base_ops = targeted_base_candidate_ops(
@@ -3594,6 +3810,9 @@ class ARCSolver:
             ):
                 continue
             beam_first_names = {
+                "repeated_half",
+                "repeated_outer_panel",
+                "noisy_box_crosses",
                 "alternating_rays",
                 "two_marker_stripes",
                 "twinkle_stars",
@@ -3625,6 +3844,9 @@ class ARCSolver:
             }
             shallow_search_names = {"odd_blocks4", "periodic_repair", "red_blue_frame"}
             beam_fallback_names = {
+                "repeated_half",
+                "repeated_outer_panel",
+                "noisy_box_crosses",
                 "sym_cutout",
                 "cyan_cross_fill",
                 "dirty_quilt",

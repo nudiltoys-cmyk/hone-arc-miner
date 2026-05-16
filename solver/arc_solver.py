@@ -1347,6 +1347,35 @@ def complete_edge_l_marker(grid: Grid) -> Grid:
     return clone(grid)
 
 
+def recolor_longest_vertical_five_run(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 4 or w < 4 or not colors(grid) <= {0, 5}:
+        return clone(grid)
+
+    runs: list[tuple[int, int, int]] = []
+    for c in range(w):
+        r = 0
+        while r < h:
+            if grid[r][c] != 5:
+                r += 1
+                continue
+            start = r
+            while r < h and grid[r][c] == 5:
+                r += 1
+            runs.append((r - start, start, c))
+    if not runs:
+        return clone(grid)
+    runs.sort(reverse=True)
+    best_len, start, col = runs[0]
+    if best_len < 3 or (len(runs) > 1 and runs[1][0] == best_len):
+        return clone(grid)
+
+    out = clone(grid)
+    for r in range(start, start + best_len):
+        out[r][col] = 1
+    return out
+
+
 def extract_repeated_half(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h >= 4 and h % 2 == 0:
@@ -2826,6 +2855,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("row_diag", row_diagonal_expansion))
     elif all(ex["input"] != complete_edge_l_marker(ex["input"]) for ex in examples):
         ops.append(Op("edge_l_marker", complete_edge_l_marker))
+    elif all(ex["input"] != recolor_longest_vertical_five_run(ex["input"]) for ex in examples):
+        ops.append(Op("vertical_five_run", recolor_longest_vertical_five_run))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
         ops.append(Op("repeated_half", extract_repeated_half))
     elif all(shape(ex["input"]) != shape(extract_repeated_outer_panel(ex["input"])) for ex in examples):
@@ -3962,6 +3993,7 @@ class ARCSolver:
                 continue
             beam_first_names = {
                 "edge_l_marker",
+                "vertical_five_run",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",
@@ -3997,6 +4029,7 @@ class ARCSolver:
             shallow_search_names = {"odd_blocks4", "periodic_repair", "red_blue_frame"}
             beam_fallback_names = {
                 "edge_l_marker",
+                "vertical_five_run",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",

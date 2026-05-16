@@ -1376,6 +1376,34 @@ def recolor_longest_vertical_five_run(grid: Grid) -> Grid:
     return out
 
 
+def extend_single_cells_down_columns(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if not is_single_cells_down_columns_candidate(grid):
+        return clone(grid)
+    out = clone(grid)
+    for c in range(w):
+        pts = [(r, grid[r][c]) for r in range(h) if grid[r][c] != 0]
+        if not pts:
+            continue
+        r0, value = pts[0]
+        for r in range(r0, h):
+            out[r][c] = value
+    return out if out != grid else clone(grid)
+
+
+def is_single_cells_down_columns_candidate(grid: Grid) -> bool:
+    h, w = shape(grid)
+    if h != 3 or w != 3:
+        return False
+    column_points = 0
+    for c in range(w):
+        pts = [(r, grid[r][c]) for r in range(h) if grid[r][c] != 0]
+        if len(pts) > 1:
+            return False
+        column_points += len(pts)
+    return column_points >= 2
+
+
 def extract_repeated_half(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h >= 4 and h % 2 == 0:
@@ -2857,6 +2885,10 @@ def targeted_base_candidate_ops(
         ops.append(Op("edge_l_marker", complete_edge_l_marker))
     elif all(ex["input"] != recolor_longest_vertical_five_run(ex["input"]) for ex in examples):
         ops.append(Op("vertical_five_run", recolor_longest_vertical_five_run))
+    elif all(is_single_cells_down_columns_candidate(ex["input"]) for ex in examples) and any(
+        ex["input"] != extend_single_cells_down_columns(ex["input"]) for ex in examples
+    ):
+        ops.append(Op("column_down_fill", extend_single_cells_down_columns))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
         ops.append(Op("repeated_half", extract_repeated_half))
     elif all(shape(ex["input"]) != shape(extract_repeated_outer_panel(ex["input"])) for ex in examples):
@@ -3730,6 +3762,35 @@ class ARCSolver:
                                 programs.append(zoom_part + orient_a + gravity_part + orient_b + center)
             return programs
 
+        if base_name == "column_down_fill":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            zoom_parts = [[], [op["zoom2"]], [op["zoom3"]], [op["zoom2"], op["zoom3"]]]
+            ordered_generator_pairs = [(a, b) for a in range(1, 10) for b in range(1, 10) if a != b]
+            ordered_generator_pairs.sort(
+                key=lambda pair: (
+                    int(pair[0] in palette) + int(pair[1] in palette),
+                    int(pair[0] in palette),
+                    int(pair[1] in palette),
+                    pair[0],
+                    pair[1],
+                )
+            )
+            generator_swaps = (
+                [[]]
+                + [[swap_gen_op(a, b)] for a, b in ordered_generator_pairs]
+                + [[swap_op(a, b)] for a, b in combinations(palette, 2)]
+            )
+            for swap in generator_swaps:
+                for first_gravity in gravity_steps:
+                    for orient_a in turns:
+                        for second_gravity in gravity_steps:
+                            for zoom_part in zoom_parts:
+                                for orient_b in turns:
+                                    programs.append(swap + first_gravity + orient_a + second_gravity + zoom_part + orient_b)
+                                    programs.append(orient_a + first_gravity + second_gravity + swap + zoom_part + orient_b)
+            return programs
+
         if base_name == "repeated_half":
             likely_removed = sorted(start_palette - output_palette)
             remaining = sorted((start_palette | output_palette | test_palette) - set(likely_removed))
@@ -3994,6 +4055,7 @@ class ARCSolver:
             beam_first_names = {
                 "edge_l_marker",
                 "vertical_five_run",
+                "column_down_fill",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",
@@ -4030,6 +4092,7 @@ class ARCSolver:
             beam_fallback_names = {
                 "edge_l_marker",
                 "vertical_five_run",
+                "column_down_fill",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",

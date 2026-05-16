@@ -1089,6 +1089,147 @@ def copy_colored_sprite_to_gray_rectangles(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def fill_blue_sprite_copies_from_source(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 10 or w < 10 or h > 21 or w > 21:
+        return clone(grid)
+    if 1 not in colors(grid) or 2 not in colors(grid):
+        return clone(grid)
+
+    seen: set[tuple[int, int]] = set()
+    comps: list[list[tuple[int, int]]] = []
+    for sr in range(h):
+        for sc in range(w):
+            if grid[sr][sc] == 0 or (sr, sc) in seen:
+                continue
+            stack = [(sr, sc)]
+            seen.add((sr, sc))
+            comp: list[tuple[int, int]] = []
+            while stack:
+                r, c = stack.pop()
+                comp.append((r, c))
+                for nr in range(r - 1, r + 2):
+                    for nc in range(c - 1, c + 2):
+                        if (
+                            0 <= nr < h
+                            and 0 <= nc < w
+                            and (nr, nc) not in seen
+                            and grid[nr][nc] != 0
+                        ):
+                            seen.add((nr, nc))
+                            stack.append((nr, nc))
+            comps.append(comp)
+
+    source_comps = [
+        comp
+        for comp in comps
+        if any(grid[r][c] == 1 for r, c in comp) and any(grid[r][c] == 2 for r, c in comp)
+    ]
+    if not source_comps:
+        return clone(grid)
+    source = max(source_comps, key=lambda comp: sum(1 for r, c in comp if grid[r][c] == 1))
+    r0, r1 = min(r for r, _ in source), max(r for r, _ in source)
+    c0, c1 = min(c for _, c in source), max(c for _, c in source)
+    src_h, src_w = r1 - r0 + 1, c1 - c0 + 1
+    if src_h < 2 or src_w < 2 or src_h > 5 or src_w > 5:
+        return clone(grid)
+
+    source_blue = [(r - r0, c - c0) for r, c in source if grid[r][c] == 1]
+    source_red = [(r - r0, c - c0) for r, c in source if grid[r][c] == 2]
+    if not source_blue or len(source_red) < 2:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    tried: set[tuple[int, int, int]] = set()
+    covered_red: set[tuple[int, int]] = set()
+    red_cells = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 2]
+    for mag in (3, 2, 1):
+        for tr, tc in red_cells:
+            for rr, rc in source_red:
+                for br in range(mag):
+                    for bc in range(mag):
+                        off_r = tr - rr * mag - br
+                        off_c = tc - rc * mag - bc
+                        key = (mag, off_r, off_c)
+                        if key in tried:
+                            continue
+                        tried.add(key)
+                        if off_r < 0 or off_c < 0 or off_r + src_h * mag > h or off_c + src_w * mag > w:
+                            continue
+
+                        ok = True
+                        expected_red: set[tuple[int, int]] = set()
+                        for sr, sc in source_red:
+                            for dr in range(mag):
+                                for dc in range(mag):
+                                    pos = (off_r + sr * mag + dr, off_c + sc * mag + dc)
+                                    expected_red.add(pos)
+                                    if grid[pos[0]][pos[1]] != 2:
+                                        ok = False
+                                        break
+                                if not ok:
+                                    break
+                            if not ok:
+                                break
+                        if not ok:
+                            continue
+                        if expected_red & covered_red:
+                            continue
+                        for pr in range(off_r, off_r + src_h * mag):
+                            for pc in range(off_c, off_c + src_w * mag):
+                                if grid[pr][pc] == 2 and (pr, pc) not in expected_red:
+                                    ok = False
+                                    break
+                            if not ok:
+                                break
+                        if not ok:
+                            continue
+
+                        to_fill: list[tuple[int, int]] = []
+                        for sr, sc in source_blue:
+                            for dr in range(mag):
+                                for dc in range(mag):
+                                    pr, pc = off_r + sr * mag + dr, off_c + sc * mag + dc
+                                    if grid[pr][pc] == 0:
+                                        to_fill.append((pr, pc))
+                                    elif grid[pr][pc] != 1:
+                                        ok = False
+                                        break
+                                if not ok:
+                                    break
+                            if not ok:
+                                break
+                        if not ok or not to_fill:
+                            continue
+                        for pr, pc in to_fill:
+                            out[pr][pc] = 1
+                            changed = True
+                        covered_red.update(expected_red)
+    return out if changed else clone(grid)
+
+
+def paint_gray_boxes_from_left_pattern(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 6 or w < 6 or 5 not in colors(grid):
+        return clone(grid)
+    pattern = [grid[r][0] for r in range(h)]
+    pattern_colors = set(pattern) - {0}
+    if len(pattern_colors) < 2 or 5 in pattern_colors:
+        return clone(grid)
+    if any(value not in {0, 5} for r, row in enumerate(grid) for c, value in enumerate(row) if c != 0):
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for r in range(h):
+        for c in range(1, w):
+            if grid[r][c] == 5:
+                out[r][c] = pattern[r]
+                changed = True
+    return out if changed else clone(grid)
+
+
 def extract_flipped_linegrid_bitmap(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != w or h < 5:
@@ -1131,6 +1272,46 @@ def extract_flipped_linegrid_bitmap(grid: Grid) -> Grid:
         result = flip_h(bitmap)
         if shape(result) != shape(grid) and result != grid:
             return result
+    return clone(grid)
+
+
+def project_origin_shape_across_linegrid(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 11:
+        return clone(grid)
+
+    for line_color in sorted(nonzero_colors(grid)):
+        full_rows = [r for r in range(h) if all(grid[r][c] == line_color for c in range(w))]
+        full_cols = [c for c in range(w) if all(grid[r][c] == line_color for r in range(h))]
+        if len(full_rows) != 2 or len(full_cols) != 2:
+            continue
+        row_sizes = [full_rows[0], full_rows[1] - full_rows[0] - 1, h - full_rows[1] - 1]
+        col_sizes = [full_cols[0], full_cols[1] - full_cols[0] - 1, w - full_cols[1] - 1]
+        if len(set(row_sizes + col_sizes)) != 1 or row_sizes[0] < 3:
+            continue
+        size = row_sizes[0]
+        row_starts = [0, full_rows[0] + 1, full_rows[1] + 1]
+        col_starts = [0, full_cols[0] + 1, full_cols[1] + 1]
+        pattern = [
+            (r, c)
+            for r in range(size)
+            for c in range(size)
+            if grid[row_starts[0] + r][col_starts[0] + c] not in {0, line_color}
+        ]
+        if len(pattern) < 2:
+            continue
+
+        out = clone(grid)
+        changed = False
+        for rs in row_starts:
+            for cs in col_starts:
+                for dr, dc in pattern:
+                    rr, cc = rs + dr, cs + dc
+                    if out[rr][cc] == 0:
+                        out[rr][cc] = line_color
+                        changed = True
+        if changed:
+            return out
     return clone(grid)
 
 
@@ -1188,6 +1369,10 @@ def fill_blue_zero_holes(grid: Grid) -> Grid:
         return clone(grid)
     palette = nonzero_colors(grid)
     if 1 in palette or len(palette) != 1:
+        return clone(grid)
+    if permeable_linegrid_fill(grid) != grid:
+        return clone(grid)
+    if h == 30 and restore_green_zero_arteries(grid) != grid:
         return clone(grid)
 
     out = clone(grid)
@@ -1710,6 +1895,36 @@ def restore_green_zero_arteries(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def twinkle_sparse_stars(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 5 or h > 15:
+        return clone(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if not pts or len(pts) > 8 or not any(value in {1, 2} for _, _, value in pts):
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for r, c, value in pts:
+        if value == 1:
+            for dr, dc in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+                rr, cc = r + dr, c + dc
+                if not (0 <= rr < h and 0 <= cc < w) or out[rr][cc] not in {0, 7}:
+                    return clone(grid)
+                if out[rr][cc] == 0:
+                    out[rr][cc] = 7
+                    changed = True
+        elif value == 2:
+            for dr, dc in ((1, 1), (-1, 1), (1, -1), (-1, -1)):
+                rr, cc = r + dr, c + dc
+                if not (0 <= rr < h and 0 <= cc < w) or out[rr][cc] not in {0, 4}:
+                    return clone(grid)
+                if out[rr][cc] == 0:
+                    out[rr][cc] = 4
+                    changed = True
+    return out if changed else clone(grid)
+
+
 def sparse_cell_zoom3(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != 3 or w != 3:
@@ -1799,6 +2014,40 @@ def alternating_rays_from_points(grid: Grid) -> Grid:
         for cc in range(c, w):
             out[r][cc] = value if cc % 2 == c % 2 else 5
     return out
+
+
+def alternating_stripes_from_two_markers(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if len(pts) != 2 or pts[0][2] == pts[1][2]:
+        return clone(grid)
+
+    (r1, c1, v1), (r2, c2, v2) = pts
+    if abs(c1 - c2) >= 2 and r1 in {0, h - 1} and r2 in {0, h - 1}:
+        left, right = sorted(pts, key=lambda item: item[1])
+        start = left[1]
+        step = right[1] - left[1]
+        colors_lr = [left[2], right[2]]
+        out = [[0 for _ in range(w)] for _ in range(h)]
+        for idx, c in enumerate(range(start, w, step)):
+            color = colors_lr[idx % 2]
+            for r in range(h):
+                out[r][c] = color
+        return out
+
+    if abs(r1 - r2) >= 2 and c1 in {0, w - 1} and c2 in {0, w - 1}:
+        top, bottom = sorted(pts, key=lambda item: item[0])
+        start = top[0]
+        step = bottom[0] - top[0]
+        colors_tb = [top[2], bottom[2]]
+        out = [[0 for _ in range(w)] for _ in range(h)]
+        for idx, r in enumerate(range(start, h, step)):
+            color = colors_tb[idx % 2]
+            for c in range(w):
+                out[r][c] = color
+        return out
+
+    return clone(grid)
 
 
 def complete_hidden_row_patterns(grid: Grid) -> Grid:
@@ -2447,6 +2696,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("rebound_diag", recover_rebound_diagonal))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
+    elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
+        ops.append(Op("origin_linegrid_shape", project_origin_shape_across_linegrid))
     elif all(
         shape(ex["input"]) != shape(extract_flipped_linegrid_bitmap(ex["input"]))
         and max(shape(extract_flipped_linegrid_bitmap(ex["input"]))) <= 4
@@ -2457,6 +2708,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("red_box_blue_rings", fill_red_box_blue_rings))
     elif all(ex["input"] != fill_blue_zero_holes(ex["input"]) for ex in examples):
         ops.append(Op("blue_holes", fill_blue_zero_holes))
+    elif all(ex["input"] != paint_gray_boxes_from_left_pattern(ex["input"]) for ex in examples):
+        ops.append(Op("gray_from_left_pattern", paint_gray_boxes_from_left_pattern))
     elif all(ex["input"] != copy_colored_sprite_to_gray_rectangles(ex["input"]) for ex in examples):
         ops.append(Op("gray_sprite_copy", copy_colored_sprite_to_gray_rectangles))
     elif all(ex["input"] != cyan_window_blue_to_green(ex["input"]) for ex in examples):
@@ -2471,6 +2724,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("align_color_clusters", align_color_clusters_to_first_row))
     elif all(ex["input"] != stack_red_columns_under_blue(ex["input"]) for ex in examples):
         ops.append(Op("red_columns_up", stack_red_columns_under_blue))
+    elif all(ex["input"] != fill_blue_sprite_copies_from_source(ex["input"]) for ex in examples):
+        ops.append(Op("blue_sprite_copies", fill_blue_sprite_copies_from_source))
     elif all(
         shape(ex["input"]) == (10, 10)
         and shape(ex["input"]) != shape(largest_components_as_columns_lr(ex["input"]))
@@ -2561,6 +2816,12 @@ def targeted_base_candidate_ops(
         ops.append(Op("green_caps", green_pair_cyan_caps))
     elif all(ex["input"] != restore_green_zero_arteries(ex["input"]) for ex in examples):
         ops.append(Op("green_arteries", restore_green_zero_arteries))
+    elif all(ex["input"] != twinkle_sparse_stars(ex["input"]) for ex in examples):
+        ops.append(Op("twinkle_stars", twinkle_sparse_stars))
+    elif all(shape(ex["input"]) == shape(alternating_stripes_from_two_markers(ex["input"])) for ex in examples) and all(
+        ex["input"] != alternating_stripes_from_two_markers(ex["input"]) for ex in examples
+    ):
+        ops.append(Op("two_marker_stripes", alternating_stripes_from_two_markers))
     elif all(ex["input"] != alternating_rays_from_points(ex["input"]) for ex in examples):
         ops.append(Op("alternating_rays", alternating_rays_from_points))
     elif all(ex["input"] != complete_hidden_row_patterns(ex["input"]) for ex in examples):
@@ -2782,7 +3043,7 @@ class ARCSolver:
         test_start: tuple[tuple[int, ...], ...],
         outputs: tuple[tuple[tuple[int, ...], ...], ...],
     ) -> Grid | None:
-        for program in self._priority_post_programs(base_name, starts, outputs):
+        for program in self._priority_post_programs(base_name, starts, outputs, test_start):
             train_states = starts
             ok = True
             for op in program:
@@ -2818,6 +3079,7 @@ class ARCSolver:
         base_name: str,
         starts: tuple[tuple[tuple[int, ...], ...], ...],
         outputs: tuple[tuple[tuple[int, ...], ...], ...],
+        test_start: tuple[tuple[int, ...], ...] | None = None,
     ) -> list[list[Op]]:
         start_palette = {
             value
@@ -2830,6 +3092,12 @@ class ARCSolver:
             value
             for state in outputs
             for row in state
+            for value in row
+            if 1 <= value <= 9
+        }
+        test_palette = {
+            value
+            for row in (test_start or ())
             for value in row
             if 1 <= value <= 9
         }
@@ -3200,6 +3468,73 @@ class ARCSolver:
                 programs.append(turn)
             return programs
 
+        if base_name == "gray_from_left_pattern":
+            removal_colors: list[int] = []
+            for color_group in (
+                sorted(test_palette - start_palette),
+                sorted(start_palette - output_palette),
+                sorted(test_palette - output_palette),
+                sorted(start_palette | output_palette | test_palette),
+            ):
+                for color in color_group:
+                    if color not in removal_colors:
+                        removal_colors.append(color)
+            removals = [[remove_op(c)] for c in removal_colors] + [[]]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops]
+            centers = [[], [op["recenter"]]]
+            for orient_a in orientations:
+                for scale in ([], [op["downsample2"]]):
+                    for removal in removals:
+                        for orient_b in orientations:
+                            for shift_step in shift_steps:
+                                for center in centers:
+                                    programs.append(orient_a + scale + removal + orient_b + shift_step + center)
+            return programs
+
+        if base_name == "two_marker_stripes":
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            for orient_a in orientations:
+                for first_gravity in gravity_steps:
+                    for second_gravity in gravity_steps:
+                        for swap in swaps:
+                            for orient_b in orientations:
+                                programs.append(orient_a + first_gravity + second_gravity + swap + orient_b)
+                                programs.append(first_gravity + second_gravity + swap + orient_b)
+            return programs
+
+        if base_name == "twinkle_stars":
+            highlights = [[]] + [[keep_op(c)] for c in sorted((start_palette | output_palette | test_palette) - {0})]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            for orient in orientations:
+                for first_gravity in gravity_steps:
+                    for highlight in highlights:
+                        for second_gravity in gravity_steps:
+                            programs.append(orient + first_gravity + highlight + second_gravity)
+                            programs.append(first_gravity + highlight + second_gravity + orient)
+            return programs
+
+        if base_name == "blue_sprite_copies":
+            highlights = [[]] + [[keep_op(c)] for c in sorted((start_palette | output_palette | test_palette) - {0})]
+            centers = [[], [op["recenter"]]]
+            for highlight in highlights:
+                for center in centers:
+                    for swap in swaps:
+                        programs.append(highlight + center + swap)
+                        programs.append(highlight + swap + center)
+            return programs
+
+        if base_name == "origin_linegrid_shape":
+            centers = [[], [op["recenter"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            for center in centers:
+                for first_gravity in gravity_steps:
+                    for orient_a in orientations:
+                        for orient_b in orientations:
+                            for swap in swaps:
+                                programs.append(center + first_gravity + orient_a + orient_b + swap)
+                                programs.append(first_gravity + center + orient_a + orient_b + swap)
+            return programs
+
         return []
 
     def _same_or_rotated_downsampled_shapes(
@@ -3260,15 +3595,19 @@ class ARCSolver:
                 continue
             beam_first_names = {
                 "alternating_rays",
+                "two_marker_stripes",
+                "twinkle_stars",
                 "gray_container",
                 "hidden_sprite",
                 "red_straightaways",
                 "redline_creature",
                 "rebound_diag",
                 "blast_radius",
+                "origin_linegrid_shape",
                 "linegrid_extract",
                 "red_box_blue_rings",
                 "blue_holes",
+                "gray_from_left_pattern",
                 "gray_sprite_copy",
                 "cyan_window",
                 "boxed_sprite_recolor",
@@ -3276,6 +3615,7 @@ class ARCSolver:
                 "mapped_dot_blocks",
                 "align_color_clusters",
                 "red_columns_up",
+                "blue_sprite_copies",
                 "largest_columns",
                 "largest_rows",
                 "gray_panels",
@@ -3293,9 +3633,11 @@ class ARCSolver:
                 "redline_creature",
                 "rebound_diag",
                 "blast_radius",
+                "origin_linegrid_shape",
                 "linegrid_extract",
                 "red_box_blue_rings",
                 "blue_holes",
+                "gray_from_left_pattern",
                 "gray_sprite_copy",
                 "cyan_window",
                 "boxed_sprite_recolor",
@@ -3303,6 +3645,7 @@ class ARCSolver:
                 "mapped_dot_blocks",
                 "align_color_clusters",
                 "red_columns_up",
+                "blue_sprite_copies",
                 "largest_columns",
                 "largest_rows",
                 "gray_panels",
@@ -3324,6 +3667,8 @@ class ARCSolver:
                 "quadrant_columns",
                 "green_caps",
                 "green_arteries",
+                "twinkle_stars",
+                "two_marker_stripes",
                 "sparse_zoom3",
                 "macro_interp",
                 "alternating_rays",

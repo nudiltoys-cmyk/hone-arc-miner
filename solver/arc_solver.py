@@ -1315,6 +1315,38 @@ def project_origin_shape_across_linegrid(grid: Grid) -> Grid:
     return clone(grid)
 
 
+def complete_edge_l_marker(grid: Grid) -> Grid:
+    def complete_left(canon: Grid) -> Grid:
+        h, w = shape(canon)
+        if h < 3 or w < 3:
+            return clone(canon)
+        pts = [(r, c, canon[r][c]) for r in range(h) for c in range(w) if canon[r][c] != 0]
+        if len(pts) != h or any(c != 0 for _, c, _ in pts):
+            return clone(canon)
+        marker = pts[0][2]
+        if any(value != marker for _, _, value in pts):
+            return clone(canon)
+        out = clone(canon)
+        for r in range(h - 1):
+            out[r][1] = 2
+        for c in range(1, w):
+            out[h - 1][c] = 4
+        return out
+
+    transforms: list[tuple[Callable[[Grid], Grid], Callable[[Grid], Grid]]] = [
+        (clone, clone),
+        (flip_h, flip_h),
+        (transpose, transpose),
+        (lambda g: transpose(flip_v(g)), lambda g: flip_v(transpose(g))),
+    ]
+    for to_left, from_left in transforms:
+        canon = to_left(grid)
+        out = complete_left(canon)
+        if out != canon:
+            return from_left(out)
+    return clone(grid)
+
+
 def extract_repeated_half(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h >= 4 and h % 2 == 0:
@@ -2487,6 +2519,26 @@ def downsample4(grid: Grid) -> Grid:
     return downsample2(downsample2(grid))
 
 
+def uniform_block_downsample(grid: Grid, factor: int) -> Grid | None:
+    h, w = shape(grid)
+    if factor <= 1 or h % factor != 0 or w % factor != 0:
+        return None
+    out: Grid = []
+    for br in range(h // factor):
+        row: list[int] = []
+        for bc in range(w // factor):
+            vals = {
+                grid[r][c]
+                for r in range(br * factor, (br + 1) * factor)
+                for c in range(bc * factor, (bc + 1) * factor)
+            }
+            if len(vals) != 1:
+                return None
+            row.append(next(iter(vals)))
+        out.append(row)
+    return out
+
+
 def gravity(grid: Grid, direction: str) -> Grid:
     h, w = shape(grid)
     out = [[0 for _ in range(w)] for _ in range(h)]
@@ -2772,6 +2824,8 @@ def targeted_base_candidate_ops(
     ops: list[Op] = []
     if all(shape(ex["input"])[0] == 1 for ex in examples):
         ops.append(Op("row_diag", row_diagonal_expansion))
+    elif all(ex["input"] != complete_edge_l_marker(ex["input"]) for ex in examples):
+        ops.append(Op("edge_l_marker", complete_edge_l_marker))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
         ops.append(Op("repeated_half", extract_repeated_half))
     elif all(shape(ex["input"]) != shape(extract_repeated_outer_panel(ex["input"])) for ex in examples):
@@ -2995,6 +3049,14 @@ class ARCSolver:
         large_zoom = self._try_solver(self._solve_by_large_zoom_program, train_examples, test_input)
         if large_zoom is not None:
             return large_zoom
+
+        uniform_zoom = self._try_solver(self._solve_by_uniform_zoomed_program, train_examples, test_input)
+        if uniform_zoom is not None:
+            return uniform_zoom
+
+        downsampled = self._try_solver(self._solve_by_downsampled_program, train_examples, test_input)
+        if downsampled is not None:
+            return downsampled
 
         targeted = self._try_solver(self._solve_by_targeted_base_program, train_examples, test_input)
         if targeted is not None:
@@ -3625,6 +3687,18 @@ class ARCSolver:
                                 programs.append(first_gravity + center + orient_a + orient_b + swap)
             return programs
 
+        if base_name == "edge_l_marker":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            centers = [[], [op["recenter"]]]
+            for zoom_part in ([], [op["zoom2"]], [op["zoom3"]], [op["zoom2"], op["zoom3"]]):
+                for orient_a in turns:
+                    for gravity_part in gravity_steps:
+                        for orient_b in turns:
+                            for center in centers:
+                                programs.append(zoom_part + orient_a + gravity_part + orient_b + center)
+            return programs
+
         if base_name == "repeated_half":
             likely_removed = sorted(start_palette - output_palette)
             remaining = sorted((start_palette | output_palette | test_palette) - set(likely_removed))
@@ -3683,26 +3757,103 @@ class ARCSolver:
             for start, output in zip(starts, outputs)
         )
 
-    def _solve_by_large_zoom_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
-        def downsample_uniform(grid: Grid, factor: int) -> Grid | None:
-            h, w = shape(grid)
-            if h % factor != 0 or w % factor != 0:
-                return None
-            out: Grid = []
-            for br in range(h // factor):
-                row: list[int] = []
-                for bc in range(w // factor):
-                    vals = {
-                        grid[r][c]
-                        for r in range(br * factor, (br + 1) * factor)
-                        for c in range(bc * factor, (bc + 1) * factor)
-                    }
-                    if len(vals) != 1:
-                        return None
-                    row.append(next(iter(vals)))
-                out.append(row)
-            return out
+    def _shape_preserving_post_ops(
+        self,
+        examples: Sequence[Example],
+        outputs: Sequence[Grid],
+    ) -> list[Op]:
+        palette: set[int] = set()
+        for ex, output in zip(examples, outputs):
+            palette |= colors(ex["input"]) | colors(output)
+        nonzero_palette = sorted(c for c in palette if 1 <= c <= 9)
 
+        ops: list[Op] = [
+            Op("rot90", rotate90),
+            Op("rot180", rotate180),
+            Op("rot270", rotate270),
+            Op("flip_h", flip_h),
+            Op("flip_v", flip_v),
+            Op("transpose", transpose),
+            Op("anti_diag", flip_antidiagonal),
+            Op("recenter", recenter),
+            Op("grav_down", lambda g: gravity(g, "down")),
+            Op("grav_up", lambda g: gravity(g, "up")),
+            Op("grav_left", lambda g: gravity(g, "left")),
+            Op("grav_right", lambda g: gravity(g, "right")),
+        ]
+        for direction in ("up", "down", "left", "right"):
+            for amount in (1, 2, 3):
+                ops.append(Op(f"shift_{direction}_{amount}", lambda g, d=direction, a=amount: shift(g, d, a)))
+        for a, b in combinations(nonzero_palette, 2):
+            ops.append(Op(f"swap_{a}_{b}", lambda g, x=a, y=b: swap_colors(g, x, y)))
+        for c in nonzero_palette:
+            ops.append(Op(f"remove_{c}", lambda g, x=c: remove_color(g, x)))
+            ops.append(Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x)))
+        for a, b in combinations(range(1, 10), 2):
+            ops.append(Op(f"swap_gen_{a}_{b}", lambda g, x=a, y=b: swap_colors_generator(g, x, y)))
+        for c in range(1, 10):
+            ops.append(Op(f"remove_gen_{c}", lambda g, x=c: remove_color_generator(g, x)))
+            ops.append(Op(f"highlight_gen_{c}", lambda g, x=c: keep_color_generator(g, x)))
+        return ops
+
+    def _solve_by_uniform_zoomed_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        for factor in (9, 6, 4, 3, 2):
+            if not all(
+                shape(ex["output"]) == (shape(ex["input"])[0] * factor, shape(ex["input"])[1] * factor)
+                for ex in examples
+            ):
+                continue
+
+            small_outputs = [uniform_block_downsample(ex["output"], factor) for ex in examples]
+            if any(output is None for output in small_outputs):
+                continue
+            outputs = [output for output in small_outputs if output is not None]
+
+            starts = tuple(freeze(ex["input"]) for ex in examples)
+            small_targets = tuple(freeze(output) for output in outputs)
+            test_start = freeze(test_input)
+            if starts == small_targets:
+                return zoom(test_input, factor)
+
+            solved = self._search_exact_program(
+                starts,
+                test_start,
+                small_targets,
+                self._shape_preserving_post_ops(examples, outputs),
+                max_depth=4,
+                beam_width=max(self.post_beam_width, 80),
+            )
+            if solved is not None:
+                return zoom(solved, factor)
+        return None
+
+    def _solve_by_downsampled_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
+        if not all(
+            shape(ex["output"]) == (shape(ex["input"])[0] // 2, shape(ex["input"])[1] // 2)
+            for ex in examples
+        ):
+            return None
+
+        starts = tuple(freeze(downsample2(ex["input"])) for ex in examples)
+        outputs = tuple(freeze(ex["output"]) for ex in examples)
+        test_start = freeze(downsample2(test_input))
+        if starts == outputs:
+            return [list(row) for row in test_start]
+
+        small_examples = [
+            {"input": [list(row) for row in start], "output": ex["output"]}
+            for start, ex in zip(starts, examples)
+        ]
+        return self._search_exact_program(
+            starts,
+            test_start,
+            outputs,
+            self._shape_preserving_post_ops(small_examples, [ex["output"] for ex in examples]),
+            max_depth=4,
+            beam_width=max(self.post_beam_width, 80),
+        )
+
+    def _solve_by_large_zoom_program(self, examples: list[Example], test_input: Grid) -> Grid | None:
         def left_shadow_transform(grid: Grid, color1: int, color2: int) -> Grid:
             h, w = shape(grid)
             out = swap_colors_generator(gravity(grid, "left"), color1, color2)
@@ -3754,7 +3905,7 @@ class ARCSolver:
                     if all(state == ex["output"] for state, ex in zip(train_states, examples)):
                         return test_state
 
-            output_smalls = [downsample_uniform(ex["output"], factor) for ex in examples]
+            output_smalls = [uniform_block_downsample(ex["output"], factor) for ex in examples]
             if all(output is not None for output in output_smalls):
                 expected_smalls = [output for output in output_smalls if output is not None]
                 for color1 in range(10):
@@ -3810,6 +3961,7 @@ class ARCSolver:
             ):
                 continue
             beam_first_names = {
+                "edge_l_marker",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",
@@ -3844,6 +3996,7 @@ class ARCSolver:
             }
             shallow_search_names = {"odd_blocks4", "periodic_repair", "red_blue_frame"}
             beam_fallback_names = {
+                "edge_l_marker",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",

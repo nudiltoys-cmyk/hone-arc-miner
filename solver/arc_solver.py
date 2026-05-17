@@ -1654,6 +1654,71 @@ def fill_empty_interior_lines_green(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def complete_green_zigzag_cyan_caps(grid: Grid) -> Grid:
+    if nonzero_colors(grid) != {3}:
+        return clone(grid)
+    comps: list[tuple[int, int, int, int, int]] = []
+    for comp in connected_components(grid):
+        rect = _component_rect(comp)
+        if rect is None:
+            return clone(grid)
+        r0, r1, c0, c1 = rect
+        height = r1 - r0 + 1
+        width = c1 - c0 + 1
+        if height != width:
+            return clone(grid)
+        comps.append((r0, r1, c0, c1, height))
+    if not comps or len(comps) % 2 != 0 or len(comps) > 4:
+        return clone(grid)
+
+    h, w = shape(grid)
+    out = clone(grid)
+    used: set[int] = set()
+    changed = False
+
+    def draw_rect(r0: int, r1: int, c0: int, c1: int) -> None:
+        nonlocal changed
+        for r in range(r0, r1 + 1):
+            if not 0 <= r < h:
+                continue
+            for c in range(c0, c1 + 1):
+                if 0 <= c < w:
+                    out[r][c] = 8
+                    changed = True
+
+    for i, top in enumerate(comps):
+        if i in used:
+            continue
+        tr0, _, tc0, _, size = top
+        candidates: list[tuple[int, str]] = []
+        for j, bottom in enumerate(comps):
+            if i == j or j in used:
+                continue
+            br0, _, bc0, _, bsize = bottom
+            if bsize != size or br0 != tr0 + size:
+                continue
+            if bc0 == tc0 + size:
+                candidates.append((j, "right"))
+            elif bc0 == tc0 - size:
+                candidates.append((j, "left"))
+        if len(candidates) != 1:
+            return clone(grid)
+
+        j, direction = candidates[0]
+        br0, _, bc0, _, _ = comps[j]
+        if direction == "right":
+            draw_rect(tr0 - size, tr0 - 1, bc0 + size, bc0 + 2 * size - 1)
+            draw_rect(br0 + size, br0 + 2 * size - 1, tc0 - size, tc0 - 1)
+        else:
+            draw_rect(tr0 - size, tr0 - 1, bc0 - size, bc0 - 1)
+            draw_rect(br0 + size, br0 + 2 * size - 1, tc0 + size, tc0 + 2 * size - 1)
+        used.update({i, j})
+
+    if len(used) != len(comps):
+        return clone(grid)
+    return out if changed else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3052,6 +3117,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("death_star_halo", death_star_halo_beams))
     elif all(ex["input"] != fill_empty_interior_lines_green(ex["input"]) for ex in examples):
         ops.append(Op("empty_green_lines", fill_empty_interior_lines_green))
+    elif all(ex["input"] != complete_green_zigzag_cyan_caps(ex["input"]) for ex in examples):
+        ops.append(Op("green_zigzag_caps", complete_green_zigzag_cyan_caps))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3621,6 +3688,26 @@ class ARCSolver:
                             for turn in turns:
                                 programs.append(scale + center + gravity_part + highlight + turn)
                                 programs.append(gravity_part + turn + scale + center + highlight)
+            return programs
+
+        if base_name == "green_zigzag_caps":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            scale_steps = [[], [op["zoom2"]], [op["zoom3"]], [op["downsample2"]]]
+            centers = [[], [op["recenter"]]]
+            color_pairs = list(combinations(sorted(start_palette | output_palette | test_palette | {3, 8}), 2))
+            swap_steps = [[]]
+            for a, b in color_pairs:
+                swap_steps.append([swap_op(a, b)])
+                swap_steps.append([swap_gen_op(a, b)])
+
+            programs.append([swap_op(3, 8), op["recenter"], op["zoom2"], op["rot180"]])
+            programs.append([swap_op(8, 3), op["recenter"], op["zoom2"], op["rot180"]])
+            for swap in swap_steps:
+                for center in centers:
+                    for scale in scale_steps:
+                        for turn in turns:
+                            programs.append(swap + center + scale + turn)
+                            programs.append(turn + swap + center + scale)
             return programs
 
         if base_name == "gray_component_size":
@@ -4352,6 +4439,7 @@ class ARCSolver:
                 "rebound_diag",
                 "death_star_halo",
                 "empty_green_lines",
+                "green_zigzag_caps",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4393,6 +4481,7 @@ class ARCSolver:
                 "rebound_diag",
                 "death_star_halo",
                 "empty_green_lines",
+                "green_zigzag_caps",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

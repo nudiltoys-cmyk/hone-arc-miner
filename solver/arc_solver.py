@@ -226,6 +226,48 @@ def extract_symmetric_cutout(grid: Grid) -> Grid:
     return candidates[0][1]
 
 
+def extract_masked_mirror_patch(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 16 or w != 16:
+        return clone(grid)
+
+    comps = []
+    seen: set[tuple[int, int]] = set()
+    for sr in range(h):
+        for sc in range(w):
+            if grid[sr][sc] != 3 or (sr, sc) in seen:
+                continue
+            stack = [(sr, sc)]
+            seen.add((sr, sc))
+            comp: list[tuple[int, int]] = []
+            while stack:
+                r, c = stack.pop()
+                comp.append((r, c))
+                for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                    if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in seen and grid[nr][nc] == 3:
+                        seen.add((nr, nc))
+                        stack.append((nr, nc))
+            rect = _component_rect(comp)
+            if rect is not None:
+                comps.append(rect)
+
+    rects = [
+        rect
+        for rect in comps
+        if (rect[1] - rect[0] + 1, rect[3] - rect[2] + 1) == (5, 5)
+    ]
+    if len(rects) != 1:
+        return clone(grid)
+
+    r0, r1, c0, c1 = rects[0]
+    mr0, mr1 = h - 1 - r1, h - 1 - r0
+    mc0, mc1 = w - 1 - c1, w - 1 - c0
+    mirrored = [row[mc0 : mc1 + 1] for row in grid[mr0 : mr1 + 1]]
+    if any(3 in row for row in mirrored):
+        return clone(grid)
+    return rotate180(mirrored)
+
+
 def _regular_line_positions(grid: Grid, line_color: int, axis: str) -> list[int]:
     h, w = shape(grid)
     limit = h if axis == "row" else w
@@ -2901,6 +2943,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
         ops.append(Op("origin_linegrid_shape", project_origin_shape_across_linegrid))
+    elif all(shape(ex["input"]) != shape(extract_masked_mirror_patch(ex["input"])) for ex in examples):
+        ops.append(Op("mirror_mask_patch", extract_masked_mirror_patch))
     elif all(
         shape(ex["input"]) != shape(extract_flipped_linegrid_bitmap(ex["input"]))
         and max(shape(extract_flipped_linegrid_bitmap(ex["input"]))) <= 4
@@ -3750,6 +3794,40 @@ class ARCSolver:
                                 programs.append(first_gravity + center + orient_a + orient_b + swap)
             return programs
 
+        if base_name == "mirror_mask_patch":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            centers = [[], [op["recenter"]]]
+            start_shape = shape([list(row) for row in starts[0]])
+            output_shape = shape([list(row) for row in outputs[0]])
+            if output_shape == (start_shape[0] * 6, start_shape[1] * 6):
+                zoom_parts = [[op["zoom3"], op["zoom2"]], [op["zoom2"], op["zoom3"]]]
+            elif output_shape == (start_shape[0] * 3, start_shape[1] * 3):
+                zoom_parts = [[op["zoom3"]]]
+            elif output_shape == (start_shape[0] * 2, start_shape[1] * 2):
+                zoom_parts = [[op["zoom2"]]]
+            else:
+                zoom_parts = [[]]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette)]
+            highlights = [[]] + [[keep_op(c)] for c in sorted((start_palette | output_palette | test_palette) - {0})]
+            shifts = [[]] + [[shift_op] for shift_op in shift_ops]
+
+            for orient_a in turns:
+                for orient_b in turns:
+                    for removal in removals:
+                        for center in centers:
+                            for gravity_part in gravity_steps:
+                                for zoom_part in zoom_parts:
+                                    programs.append(orient_a + orient_b + removal + center + gravity_part + zoom_part)
+
+            for swap in swaps:
+                for gravity_part in gravity_steps:
+                    for zoom_part in zoom_parts:
+                        for highlight in highlights:
+                            for shift_part in shifts:
+                                programs.append(swap + gravity_part + zoom_part + highlight + shift_part)
+            return programs
+
         if base_name == "edge_l_marker":
             turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
             gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
@@ -4069,6 +4147,7 @@ class ARCSolver:
                 "rebound_diag",
                 "blast_radius",
                 "origin_linegrid_shape",
+                "mirror_mask_patch",
                 "linegrid_extract",
                 "red_box_blue_rings",
                 "blue_holes",
@@ -4105,6 +4184,7 @@ class ARCSolver:
                 "rebound_diag",
                 "blast_radius",
                 "origin_linegrid_shape",
+                "mirror_mask_patch",
                 "linegrid_extract",
                 "red_box_blue_rings",
                 "blue_holes",

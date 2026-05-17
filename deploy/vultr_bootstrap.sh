@@ -66,7 +66,8 @@ WantedBy=multi-user.target
 SERVICE
 
 systemctl daemon-reload
-systemctl enable --now hone-miner.service
+systemctl enable hone-miner.service
+systemctl restart hone-miner.service
 
 if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH || true

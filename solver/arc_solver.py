@@ -1591,6 +1591,46 @@ def complete_blast_radius(grid: Grid) -> Grid:
     return best[1] if best else clone(grid)
 
 
+def death_star_halo_beams(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 5 or not colors(grid) <= {0, 9}:
+        return clone(grid)
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    stars: list[tuple[int, int, int]] = []
+    for comp in connected_components(grid):
+        rect = _component_rect(comp)
+        if rect is None:
+            return clone(grid)
+        r0, r1, c0, c1 = rect
+        height = r1 - r0 + 1
+        width = c1 - c0 + 1
+        if width % 2 != 0 or height > width or len(comp) != height * width:
+            return clone(grid)
+        stars.append((r1, c0, width // 2))
+    if not stars:
+        return clone(grid)
+
+    for row, col, radius in sorted(stars):
+        for rr in range(row + 1, h):
+            for dc in range(2 * radius):
+                cc = col + dc
+                if 0 <= cc < w:
+                    out[rr][cc] = 1
+        for dr in range(4 * radius):
+            for dc in range(4 * radius):
+                rr = row - dr + radius
+                cc = col + dc - radius
+                if 0 <= rr < h and 0 <= cc < w:
+                    out[rr][cc] = 3
+        for dr in range(2 * radius):
+            for dc in range(2 * radius):
+                rr = row - dr
+                cc = col + dc
+                if 0 <= rr < h and 0 <= cc < w:
+                    out[rr][cc] = 9
+    return out
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -2985,6 +3025,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("noisy_box_crosses", extract_noisy_box_crosses))
     elif all(ex["input"] != recover_rebound_diagonal(ex["input"]) for ex in examples):
         ops.append(Op("rebound_diag", recover_rebound_diagonal))
+    elif all(ex["input"] != death_star_halo_beams(ex["input"]) for ex in examples):
+        ops.append(Op("death_star_halo", death_star_halo_beams))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3421,8 +3463,14 @@ class ARCSolver:
         def remove_op(c: int) -> Op:
             return Op(f"remove_{c}", lambda g, x=c: remove_color(g, x))
 
+        def remove_gen_op(c: int) -> Op:
+            return Op(f"remove_gen_{c}", lambda g, x=c: remove_color_generator(g, x))
+
         def keep_op(c: int) -> Op:
             return Op(f"highlight_{c}", lambda g, x=c: keep_color(g, x))
+
+        def keep_gen_op(c: int) -> Op:
+            return Op(f"highlight_gen_{c}", lambda g, x=c: keep_color_generator(g, x))
 
         def remove_test_extra_op() -> Op:
             train_colors = output_palette
@@ -3511,7 +3559,25 @@ class ARCSolver:
                         for orient_a in orientations:
                             programs.append(pre_orient + zoom_part + removal + orient_a)
                             for orient_b in orientations:
-                                programs.append(pre_orient + zoom_part + removal + orient_a + orient_b)
+	                                programs.append(pre_orient + zoom_part + removal + orient_a + orient_b)
+            return programs
+
+        if base_name == "death_star_halo":
+            color_set = sorted((start_palette | output_palette | test_palette | {1, 3, 5, 9}) - {0})
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            scale_steps = [[], [op["downsample2"]], [op["zoom2"]], [op["zoom3"]]]
+
+            programs.append([op["rot180"], op["recenter"], op["downsample2"]])
+            for color in color_set:
+                programs.append([remove_gen_op(color), op["downsample2"], op["rot270"], op["grav_right"], op["rot270"]])
+                programs.append([remove_op(color), op["downsample2"], op["rot270"], op["grav_right"], op["rot270"]])
+
+            for turn in turns:
+                for gravity_part in gravity_steps:
+                    for scale in scale_steps:
+                        for orient in turns:
+                            programs.append(turn + gravity_part + scale + orient)
             return programs
 
         if base_name == "gray_component_size":
@@ -4241,6 +4307,7 @@ class ARCSolver:
                 "red_straightaways",
                 "redline_creature",
                 "rebound_diag",
+                "death_star_halo",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4280,6 +4347,7 @@ class ARCSolver:
                 "red_straightaways",
                 "redline_creature",
                 "rebound_diag",
+                "death_star_halo",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

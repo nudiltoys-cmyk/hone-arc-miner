@@ -1418,6 +1418,23 @@ def recolor_longest_vertical_five_run(grid: Grid) -> Grid:
     return out
 
 
+def recolor_gray_components_by_size(grid: Grid) -> Grid:
+    if not colors(grid) <= {0, 5}:
+        return clone(grid)
+    comps = connected_components(grid)
+    if not comps:
+        return clone(grid)
+    out = clone(grid)
+    for comp in comps:
+        size = len(comp)
+        if size not in {2, 3, 4}:
+            return clone(grid)
+        fill = 5 - size
+        for r, c in comp:
+            out[r][c] = fill
+    return out
+
+
 def extend_single_cells_down_columns(grid: Grid) -> Grid:
     h, w = shape(grid)
     if not is_single_cells_down_columns_candidate(grid):
@@ -2952,6 +2969,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("row_diag", row_diagonal_expansion))
     elif all(ex["input"] != complete_edge_l_marker(ex["input"]) for ex in examples):
         ops.append(Op("edge_l_marker", complete_edge_l_marker))
+    elif all(ex["input"] != recolor_gray_components_by_size(ex["input"]) for ex in examples):
+        ops.append(Op("gray_component_size", recolor_gray_components_by_size))
     elif all(ex["input"] != recolor_longest_vertical_five_run(ex["input"]) for ex in examples):
         ops.append(Op("vertical_five_run", recolor_longest_vertical_five_run))
     elif all(is_single_cells_down_columns_candidate(ex["input"]) for ex in examples) and any(
@@ -3493,6 +3512,28 @@ class ARCSolver:
                             programs.append(pre_orient + zoom_part + removal + orient_a)
                             for orient_b in orientations:
                                 programs.append(pre_orient + zoom_part + removal + orient_a + orient_b)
+            return programs
+
+        if base_name == "gray_component_size":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            zoom_parts = [[], [op["zoom2"]], [op["zoom3"]]]
+            color_pairs = list(combinations(sorted(start_palette | output_palette | test_palette), 2))
+            swap_steps = [[]]
+            for a, b in color_pairs:
+                swap_steps.append([swap_gen_op(a, b)])
+                swap_steps.append([swap_op(a, b)])
+
+            for a, b in color_pairs:
+                programs.append(
+                    [op["transpose"], swap_gen_op(a, b), op["rot180"], op["grav_right"], op["zoom2"]]
+                )
+            for turn in turns:
+                for swap in swap_steps:
+                    for orient in turns:
+                        for gravity_part in gravity_steps:
+                            for zoom_part in zoom_parts:
+                                programs.append(turn + swap + orient + gravity_part + zoom_part)
             return programs
 
         if base_name == "gray_sprite_copy":
@@ -4201,6 +4242,7 @@ class ARCSolver:
                 "redline_creature",
                 "rebound_diag",
                 "blast_radius",
+                "gray_component_size",
                 "origin_linegrid_shape",
                 "mirror_mask_patch",
                 "linegrid_extract",
@@ -4239,6 +4281,7 @@ class ARCSolver:
                 "redline_creature",
                 "rebound_diag",
                 "blast_radius",
+                "gray_component_size",
                 "origin_linegrid_shape",
                 "mirror_mask_patch",
                 "linegrid_extract",

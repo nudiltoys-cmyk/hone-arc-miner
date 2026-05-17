@@ -2744,6 +2744,33 @@ def fill_rectangle_holes(grid: Grid) -> Grid:
     return out
 
 
+def _solid_rectangles_with_interiors(grid: Grid) -> list[tuple[int, int, int, int]]:
+    rects: list[tuple[int, int, int, int]] = []
+    for comp in connected_components(grid):
+        rows = [r for r, _ in comp]
+        cols = [c for _, c in comp]
+        r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+        height = r1 - r0 + 1
+        width = c1 - c0 + 1
+        if height < 3 or width < 3 or len(comp) != height * width:
+            return []
+        rects.append((r0, r1, c0, c1))
+    return rects
+
+
+def is_solid_rectangle_hollow_candidate(grid: Grid) -> bool:
+    return bool(_solid_rectangles_with_interiors(grid))
+
+
+def hollow_solid_rectangles_with_8(grid: Grid) -> Grid:
+    out = clone(grid)
+    for r0, r1, c0, c1 in _solid_rectangles_with_interiors(grid):
+        for r in range(r0 + 1, r1):
+            for c in range(c0 + 1, c1):
+                out[r][c] = 8
+    return out
+
+
 def draw_lines_between_same_color_points(grid: Grid, line_color: int | None = None) -> Grid:
     out = clone(grid)
     candidates = sorted(nonzero_colors(grid))
@@ -3073,6 +3100,10 @@ def targeted_base_candidate_ops(
         ops.append(Op("alternating_rays", alternating_rays_from_points))
     elif all(ex["input"] != complete_hidden_row_patterns(ex["input"]) for ex in examples):
         ops.append(Op("row_patterns", complete_hidden_row_patterns))
+    elif all(is_solid_rectangle_hollow_candidate(ex["input"]) for ex in examples) and all(
+        ex["input"] != hollow_solid_rectangles_with_8(ex["input"]) for ex in examples
+    ):
+        ops.append(Op("hollow_rectangles8", hollow_solid_rectangles_with_8))
     elif enable_small_zoom_targets and all(
         1 < shape(ex["input"])[0] <= 5 and 1 < shape(ex["input"])[1] <= 5 for ex in examples
     ):
@@ -3828,6 +3859,30 @@ class ARCSolver:
                                 programs.append(swap + gravity_part + zoom_part + highlight + shift_part)
             return programs
 
+        if base_name == "hollow_rectangles8":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            centers = [[], [op["recenter"]], [op["recenter"], op["recenter"]]]
+            highlights = [[]] + [[keep_op(c)] for c in sorted((start_palette | output_palette | test_palette) - {0})]
+
+            for color in sorted((start_palette | output_palette | test_palette) - {0}):
+                programs.append([op["grav_down"], op["transpose"], op["downsample2"], keep_op(color)])
+            programs.append([op["zoom2"], op["grav_right"], op["recenter"], op["recenter"]])
+
+            for first_gravity in gravity_steps:
+                for turn in turns:
+                    for scale in ([], [op["downsample2"]]):
+                        for highlight in highlights:
+                            programs.append(first_gravity + turn + scale + highlight)
+                            programs.append(turn + first_gravity + scale + highlight)
+            for zoom_part in ([], [op["zoom2"]], [op["zoom3"]]):
+                for first_gravity in gravity_steps:
+                    for center in centers:
+                        for turn in turns:
+                            programs.append(zoom_part + first_gravity + center + turn)
+                            programs.append(turn + zoom_part + first_gravity + center)
+            return programs
+
         if base_name == "edge_l_marker":
             turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
             gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
@@ -4166,6 +4221,7 @@ class ARCSolver:
                 "pinwheel_source",
                 "pinwheel_complete",
                 "row_patterns",
+                "hollow_rectangles8",
             }
             shallow_search_names = {"odd_blocks4", "periodic_repair", "red_blue_frame"}
             beam_fallback_names = {
@@ -4224,6 +4280,7 @@ class ARCSolver:
                 "macro_interp",
                 "alternating_rays",
                 "row_patterns",
+                "hollow_rectangles8",
             }
             solved = None
             if base_op.name in beam_first_names:

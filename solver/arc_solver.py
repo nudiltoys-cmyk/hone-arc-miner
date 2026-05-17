@@ -1719,6 +1719,63 @@ def complete_green_zigzag_cyan_caps(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def complete_blue_frame_pink_crosshairs(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 5 or w < 5 or not colors(grid) <= {0, 1, 8} or 1 not in colors(grid):
+        return clone(grid)
+
+    seen: set[tuple[int, int]] = set()
+    frames: list[tuple[int, int, int, int]] = []
+    for sr in range(h):
+        for sc in range(w):
+            if grid[sr][sc] != 1 or (sr, sc) in seen:
+                continue
+            stack = [(sr, sc)]
+            seen.add((sr, sc))
+            comp: list[tuple[int, int]] = []
+            while stack:
+                r, c = stack.pop()
+                comp.append((r, c))
+                for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                    if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in seen and grid[nr][nc] == 1:
+                        seen.add((nr, nc))
+                        stack.append((nr, nc))
+
+            rows = [r for r, _ in comp]
+            cols = [c for _, c in comp]
+            r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+            if (r1 - r0 + 1, c1 - c0 + 1) != (5, 5) or len(comp) != 16:
+                return clone(grid)
+            for r in range(r0, r1 + 1):
+                for c in range(c0, c1 + 1):
+                    on_border = r in {r0, r1} or c in {c0, c1}
+                    if on_border and grid[r][c] != 1:
+                        return clone(grid)
+                    if not on_border and grid[r][c] == 1:
+                        return clone(grid)
+            frames.append((r0, r1, c0, c1))
+
+    if not frames:
+        return clone(grid)
+
+    out = clone(grid)
+    for r0, r1, c0, c1 in frames:
+        center_r = (r0 + r1) // 2
+        center_c = (c0 + c1) // 2
+        for c in range(w):
+            out[center_r][c] = 6
+        for r in range(h):
+            out[r][center_c] = 6
+    for r0, r1, c0, c1 in frames:
+        for c in range(c0, c1 + 1):
+            out[r0][c] = 1
+            out[r1][c] = 1
+        for r in range(r0, r1 + 1):
+            out[r][c0] = 1
+            out[r][c1] = 1
+    return out if out != grid else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3119,6 +3176,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("empty_green_lines", fill_empty_interior_lines_green))
     elif all(ex["input"] != complete_green_zigzag_cyan_caps(ex["input"]) for ex in examples):
         ops.append(Op("green_zigzag_caps", complete_green_zigzag_cyan_caps))
+    elif all(ex["input"] != complete_blue_frame_pink_crosshairs(ex["input"]) for ex in examples):
+        ops.append(Op("blue_frame_crosshairs", complete_blue_frame_pink_crosshairs))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3708,6 +3767,21 @@ class ARCSolver:
                         for turn in turns:
                             programs.append(swap + center + scale + turn)
                             programs.append(turn + swap + center + scale)
+            return programs
+
+        if base_name == "blue_frame_crosshairs":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {6})]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+
+            programs.append([Op("shift_up_2", lambda g: shift(g, "up", 2)), op["grav_down"], op["grav_left"], remove_op(6), op["rot180"]])
+            for shift_part in shift_steps:
+                for first_gravity in gravity_steps:
+                    for second_gravity in gravity_steps:
+                        for removal in removals:
+                            for turn in turns:
+                                programs.append(shift_part + first_gravity + second_gravity + removal + turn)
             return programs
 
         if base_name == "gray_component_size":
@@ -4440,6 +4514,7 @@ class ARCSolver:
                 "death_star_halo",
                 "empty_green_lines",
                 "green_zigzag_caps",
+                "blue_frame_crosshairs",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4482,6 +4557,7 @@ class ARCSolver:
                 "death_star_halo",
                 "empty_green_lines",
                 "green_zigzag_caps",
+                "blue_frame_crosshairs",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

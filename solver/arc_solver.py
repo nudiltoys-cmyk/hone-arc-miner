@@ -1631,6 +1631,29 @@ def death_star_halo_beams(grid: Grid) -> Grid:
     return out
 
 
+def fill_empty_interior_lines_green(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h < 5:
+        return clone(grid)
+    palette = nonzero_colors(grid)
+    if not palette or not palette <= {2, 8}:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for r in range(1, h - 1):
+        if all(grid[r][c] == 0 for c in range(1, w - 1)):
+            for c in range(1, w - 1):
+                out[r][c] = 3
+                changed = True
+    for c in range(1, w - 1):
+        if all(grid[r][c] == 0 for r in range(1, h - 1)):
+            for r in range(1, h - 1):
+                out[r][c] = 3
+                changed = True
+    return out if changed else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3027,6 +3050,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("rebound_diag", recover_rebound_diagonal))
     elif all(ex["input"] != death_star_halo_beams(ex["input"]) for ex in examples):
         ops.append(Op("death_star_halo", death_star_halo_beams))
+    elif all(ex["input"] != fill_empty_interior_lines_green(ex["input"]) for ex in examples):
+        ops.append(Op("empty_green_lines", fill_empty_interior_lines_green))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3418,7 +3443,7 @@ class ARCSolver:
                 except Exception:
                     ok = False
                     break
-                if not self._state_within_limits(test_state):
+                if not self._priority_state_within_limits(test_state):
                     ok = False
                     break
             if ok:
@@ -3578,6 +3603,24 @@ class ARCSolver:
                     for scale in scale_steps:
                         for orient in turns:
                             programs.append(turn + gravity_part + scale + orient)
+            return programs
+
+        if base_name == "empty_green_lines":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            scale_steps = [[], [op["downsample2"]], [op["zoom2"]], [op["zoom3"]]]
+            highlights = [[]] + [[keep_op(c)] for c in sorted((start_palette | output_palette | test_palette) - {0})]
+            centers = [[], [op["recenter"]]]
+
+            programs.append([op["zoom3"], op["recenter"], op["grav_left"], keep_op(3), op["transpose"]])
+            programs.append([op["grav_up"], op["rot270"], op["downsample2"], op["transpose"], op["rot180"]])
+            for scale in scale_steps:
+                for center in centers:
+                    for gravity_part in gravity_steps:
+                        for highlight in highlights:
+                            for turn in turns:
+                                programs.append(scale + center + gravity_part + highlight + turn)
+                                programs.append(gravity_part + turn + scale + center + highlight)
             return programs
 
         if base_name == "gray_component_size":
@@ -4308,6 +4351,7 @@ class ARCSolver:
                 "redline_creature",
                 "rebound_diag",
                 "death_star_halo",
+                "empty_green_lines",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4348,6 +4392,7 @@ class ARCSolver:
                 "redline_creature",
                 "rebound_diag",
                 "death_star_halo",
+                "empty_green_lines",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4586,6 +4631,13 @@ class ARCSolver:
             return False
         h, w = shape(grid)
         return h * w <= self.max_grid_cells
+
+    def _priority_state_within_limits(self, state: tuple[tuple[int, ...], ...]) -> bool:
+        grid = [list(row) for row in state]
+        if not valid(grid):
+            return False
+        h, w = shape(grid)
+        return h * w <= max(self.max_grid_cells, 2500)
 
     def _score_train_states(
         self,

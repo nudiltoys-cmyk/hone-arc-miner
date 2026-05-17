@@ -1776,6 +1776,50 @@ def complete_blue_frame_pink_crosshairs(grid: Grid) -> Grid:
     return out if out != grid else clone(grid)
 
 
+def restore_hidden_cyan_crosses(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 5 or w < 5 or not colors(grid) <= {0, 2, 5, 8}:
+        return clone(grid)
+    if 2 not in colors(grid) or 5 not in colors(grid):
+        return clone(grid)
+
+    selected: list[frozenset[tuple[int, int]]] = []
+    for length in (3, 2):
+        candidates: list[tuple[int, int, int, frozenset[tuple[int, int]]]] = []
+        for row in range(length, h - length):
+            for col in range(length, w - length):
+                cells = frozenset(
+                    {(row, col + dc) for dc in range(-length, length + 1)}
+                    | {(row + dr, col) for dr in range(-length, length + 1)}
+                )
+                vals = [grid[r][c] for r, c in cells]
+                if not all(value in {2, 5, 8} for value in vals):
+                    continue
+                red_count = sum(value == 2 for value in vals)
+                hidden_count = sum(value == 5 for value in vals)
+                if red_count >= 2 and hidden_count >= 1:
+                    candidates.append((red_count, hidden_count, -row * w - col, cells))
+        if candidates:
+            used: set[tuple[int, int]] = set()
+            for _, _, _, cells in sorted(candidates, reverse=True):
+                if any(cell in used for cell in cells):
+                    continue
+                selected.append(cells)
+                used.update(cells)
+            break
+
+    if not selected:
+        return clone(grid)
+    out = clone(grid)
+    changed = False
+    for cells in selected:
+        for row, col in cells:
+            if out[row][col] == 5:
+                out[row][col] = 8
+                changed = True
+    return out if changed else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3178,6 +3222,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("green_zigzag_caps", complete_green_zigzag_cyan_caps))
     elif all(ex["input"] != complete_blue_frame_pink_crosshairs(ex["input"]) for ex in examples):
         ops.append(Op("blue_frame_crosshairs", complete_blue_frame_pink_crosshairs))
+    elif all(ex["input"] != restore_hidden_cyan_crosses(ex["input"]) for ex in examples):
+        ops.append(Op("hidden_cyan_crosses", restore_hidden_cyan_crosses))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3782,6 +3828,23 @@ class ARCSolver:
                         for removal in removals:
                             for turn in turns:
                                 programs.append(shift_part + first_gravity + second_gravity + removal + turn)
+            return programs
+
+        if base_name == "hidden_cyan_crosses":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {8})]
+            highlights = [[]] + [[keep_op(c)] for c in sorted(start_palette | output_palette | test_palette | {2})]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            centers = [[], [op["recenter"]]]
+
+            programs.append([op["recenter"], remove_op(8), op["anti_diag"], op["grav_up"], keep_op(2), op["grav_right"]])
+            for center in centers:
+                for removal in removals:
+                    for turn in turns:
+                        for first_gravity in gravity_steps:
+                            for highlight in highlights:
+                                for second_gravity in gravity_steps:
+                                    programs.append(center + removal + turn + first_gravity + highlight + second_gravity)
             return programs
 
         if base_name == "gray_component_size":
@@ -4515,6 +4578,7 @@ class ARCSolver:
                 "empty_green_lines",
                 "green_zigzag_caps",
                 "blue_frame_crosshairs",
+                "hidden_cyan_crosses",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4558,6 +4622,7 @@ class ARCSolver:
                 "empty_green_lines",
                 "green_zigzag_caps",
                 "blue_frame_crosshairs",
+                "hidden_cyan_crosses",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

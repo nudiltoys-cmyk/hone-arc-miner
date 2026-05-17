@@ -1820,6 +1820,84 @@ def restore_hidden_cyan_crosses(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def complete_repeated_marker_sprites(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 5 or w < 5 or not ({2, 3} & nonzero_colors(grid)):
+        return clone(grid)
+
+    seen: set[tuple[int, int]] = set()
+    comps: list[list[tuple[int, int]]] = []
+    for sr in range(h):
+        for sc in range(w):
+            if grid[sr][sc] == 0 or (sr, sc) in seen:
+                continue
+            stack = [(sr, sc)]
+            seen.add((sr, sc))
+            comp: list[tuple[int, int]] = []
+            while stack:
+                row, col = stack.pop()
+                comp.append((row, col))
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = row + dr, col + dc
+                        if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0 and (nr, nc) not in seen:
+                            seen.add((nr, nc))
+                            stack.append((nr, nc))
+            comps.append(comp)
+
+    templates: dict[int, tuple[Grid, tuple[int, int]]] = {}
+    full_cells: set[tuple[int, int]] = set()
+    for comp in comps:
+        if len(comp) <= 1:
+            continue
+        vals = {grid[row][col] for row, col in comp}
+        marker = 2 if 2 in vals else 3 if 3 in vals else None
+        if marker is None or marker in templates:
+            continue
+        rows = [row for row, _ in comp]
+        cols = [col for _, col in comp]
+        r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+        if r1 - r0 + 1 > 3 or c1 - c0 + 1 > 3:
+            continue
+        wr0 = max(0, min(r0, h - 3))
+        wc0 = max(0, min(c0, w - 3))
+        template = [[grid[wr0 + rr][wc0 + cc] for cc in range(3)] for rr in range(3)]
+        marker_cells = [(rr, cc) for rr in range(3) for cc in range(3) if template[rr][cc] == marker]
+        if len(marker_cells) != 1:
+            continue
+        templates[marker] = (template, marker_cells[0])
+        full_cells.update(comp)
+
+    if not templates:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for row in range(h):
+        for col in range(w):
+            marker = grid[row][col]
+            if marker not in templates or (row, col) in full_cells:
+                continue
+            template, (marker_r, marker_c) = templates[marker]
+            if marker == 2:
+                template = [template_row[::-1] for template_row in template]
+                marker_c = 2 - marker_c
+            top = row - marker_r
+            left = col - marker_c
+            for rr in range(3):
+                for cc in range(3):
+                    value = template[rr][cc]
+                    if value == 0:
+                        continue
+                    nr, nc = top + rr, left + cc
+                    if 0 <= nr < h and 0 <= nc < w and out[nr][nc] == 0:
+                        out[nr][nc] = value
+                        changed = True
+    return out if changed else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3224,6 +3302,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("blue_frame_crosshairs", complete_blue_frame_pink_crosshairs))
     elif all(ex["input"] != restore_hidden_cyan_crosses(ex["input"]) for ex in examples):
         ops.append(Op("hidden_cyan_crosses", restore_hidden_cyan_crosses))
+    elif all(ex["input"] != complete_repeated_marker_sprites(ex["input"]) for ex in examples):
+        ops.append(Op("repeated_marker_sprites", complete_repeated_marker_sprites))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3845,6 +3925,21 @@ class ARCSolver:
                             for highlight in highlights:
                                 for second_gravity in gravity_steps:
                                     programs.append(center + removal + turn + first_gravity + highlight + second_gravity)
+            return programs
+
+        if base_name == "repeated_marker_sprites":
+            shifts = [
+                Op("shift_down_5", lambda g: shift(g, "down", 5)),
+                Op("shift_left_5", lambda g: shift(g, "left", 5)),
+            ]
+            programs.append([op["rot270"], shifts[0]])
+            programs.append([shifts[1], op["rot270"]])
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops] + [[shifts[0]], [shifts[1]]]
+            for turn in turns:
+                for shift_part in shift_steps:
+                    programs.append(turn + shift_part)
+                    programs.append(shift_part + turn)
             return programs
 
         if base_name == "gray_component_size":
@@ -4579,6 +4674,7 @@ class ARCSolver:
                 "green_zigzag_caps",
                 "blue_frame_crosshairs",
                 "hidden_cyan_crosses",
+                "repeated_marker_sprites",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4623,6 +4719,7 @@ class ARCSolver:
                 "green_zigzag_caps",
                 "blue_frame_crosshairs",
                 "hidden_cyan_crosses",
+                "repeated_marker_sprites",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

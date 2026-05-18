@@ -2176,6 +2176,152 @@ def restore_red_block_behind_cyan_strips(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def fill_yellow_corner_rectangles_red(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 3 or w < 3 or h > 30 or w > 30:
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for corner_color in sorted(nonzero_colors(grid)):
+        pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == corner_color]
+        if len(pts) < 4 or len(pts) > 16:
+            continue
+        point_set = set(pts)
+        rows = sorted({r for r, _ in pts})
+        cols = sorted({c for _, c in pts})
+        fill_color = 2 if corner_color != 2 else 4
+        for r0, r1 in combinations(rows, 2):
+            if r1 - r0 < 2:
+                continue
+            for c0, c1 in combinations(cols, 2):
+                if c1 - c0 < 2:
+                    continue
+                corners = {(r0, c0), (r0, c1), (r1, c0), (r1, c1)}
+                if not corners <= point_set:
+                    continue
+                if any(
+                    (r, c) in point_set and (r, c) not in corners
+                    for r in range(r0, r1 + 1)
+                    for c in range(c0, c1 + 1)
+                ):
+                    continue
+                if any(
+                    grid[r][c] != 0
+                    for r in range(r0, r1 + 1)
+                    for c in range(c0, c1 + 1)
+                    if (r, c) not in corners
+                ):
+                    continue
+                for r in range(r0 + 1, r1):
+                    for c in range(c0 + 1, c1):
+                        if out[r][c] == 0:
+                            out[r][c] = fill_color
+                            changed = True
+    return out if changed else clone(grid)
+
+
+def add_yellow_ring_to_cross_intersection(grid: Grid) -> Grid:
+    def canonical(candidate: Grid) -> Grid:
+        ch, cw = shape(candidate)
+        if ch != cw or ch < 4 or ch > 36 or 0 not in colors(candidate) or 4 in colors(candidate):
+            return clone(candidate)
+
+        full_rows = [r for r, row in enumerate(candidate) if 0 not in row and len(set(row)) == 1]
+        full_cols = [
+            c
+            for c in range(cw)
+            if all(candidate[r][c] != 0 for r in range(ch)) and len({candidate[r][c] for r in range(ch)}) <= 2
+        ]
+        if len(full_rows) != 1 or len(full_cols) != 1:
+            return clone(candidate)
+        row, col = full_rows[0], full_cols[0]
+        if row in {0, ch - 1} or col in {0, cw - 1}:
+            return clone(candidate)
+
+        row_color = candidate[row][0]
+        col_vals = [candidate[r][col] for r in range(ch) if r != row]
+        if not col_vals or len(set(col_vals)) != 1 or col_vals[0] in {0, row_color}:
+            return clone(candidate)
+        if any(candidate[row][c] != row_color for c in range(cw)):
+            return clone(candidate)
+        if any(candidate[r][col] != col_vals[0] for r in range(ch) if r != row):
+            return clone(candidate)
+        nonzero = [(r, c) for r, row_vals in enumerate(candidate) for c, value in enumerate(row_vals) if value != 0]
+        if len(nonzero) != ch + cw - 1:
+            return clone(candidate)
+
+        out = clone(candidate)
+        changed = False
+        for r in range(row - 1, row + 2):
+            for c in range(col - 1, col + 2):
+                if r == row and c == col:
+                    continue
+                if out[r][c] != 4:
+                    out[r][c] = 4
+                    changed = True
+        return out if changed else clone(candidate)
+
+    direct = canonical(grid)
+    if direct != grid:
+        return direct
+    transposed_grid = transpose(grid)
+    transposed = canonical(transposed_grid)
+    if transposed != transposed_grid:
+        return transpose(transposed)
+    return clone(grid)
+
+
+def complete_opposing_bracket_arms(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 5 or w < 7 or h > 30 or w > 30:
+        return clone(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if len(pts) != 2 or pts[0][2] == pts[1][2]:
+        return clone(grid)
+
+    def horizontal(candidate: Grid) -> Grid:
+        ch, cw = shape(candidate)
+        points = [(r, c, value) for r, row in enumerate(candidate) for c, value in enumerate(row) if value != 0]
+        if len(points) != 2:
+            return clone(candidate)
+        (r1, c1, color1), (r2, c2, color2) = sorted(points)
+        if r1 != r2 or c2 <= c1 or color1 == color2:
+            return clone(candidate)
+        distance = c2 - c1
+        if distance < 7 or distance % 2 == 0 or r1 < 2 or r1 + 2 >= ch:
+            return clone(candidate)
+        half = (distance + 1) // 2
+        left_inner = c1 + half - 2
+        right_inner = c2 - half + 2
+        if left_inner + 3 != right_inner:
+            return clone(candidate)
+        out = clone(candidate)
+        for c in range(c1, left_inner + 1):
+            out[r1][c] = color1
+        for rr in (r1 - 2, r1 - 1, r1 + 1, r1 + 2):
+            out[rr][left_inner] = color1
+        out[r1 - 2][left_inner + 1] = color1
+        out[r1 + 2][left_inner + 1] = color1
+
+        for c in range(right_inner, c2 + 1):
+            out[r1][c] = color2
+        for rr in (r1 - 2, r1 - 1, r1 + 1, r1 + 2):
+            out[rr][right_inner] = color2
+        out[r1 - 2][right_inner - 1] = color2
+        out[r1 + 2][right_inner - 1] = color2
+        return out
+
+    direct = horizontal(grid)
+    if direct != grid:
+        return direct
+    transposed_grid = transpose(grid)
+    transposed = horizontal(transposed_grid)
+    if transposed != transposed_grid:
+        return transpose(transposed)
+    return clone(grid)
+
+
 def fill_linegrid_corners_center(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != 10 or w != 10 or colors(grid) - {0, 5} or 5 not in colors(grid):
@@ -3612,6 +3758,12 @@ def targeted_base_candidate_ops(
         ex["input"] != extend_single_cells_down_columns(ex["input"]) for ex in examples
     ):
         ops.append(Op("column_down_fill", extend_single_cells_down_columns))
+    elif all(ex["input"] != fill_yellow_corner_rectangles_red(ex["input"]) for ex in examples):
+        ops.append(Op("yellow_corner_rects", fill_yellow_corner_rectangles_red))
+    elif all(ex["input"] != add_yellow_ring_to_cross_intersection(ex["input"]) for ex in examples):
+        ops.append(Op("cross_yellow_ring", add_yellow_ring_to_cross_intersection))
+    elif all(ex["input"] != complete_opposing_bracket_arms(ex["input"]) for ex in examples):
+        ops.append(Op("opposing_brackets", complete_opposing_bracket_arms))
     elif all(ex["input"] != fill_linegrid_corners_center(ex["input"]) for ex in examples):
         ops.append(Op("linegrid_corners_center", fill_linegrid_corners_center))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
@@ -4365,6 +4517,24 @@ class ARCSolver:
                                     programs.append(first_gravity + shift_part + second_gravity + turn + swap + highlight)
             return programs
 
+        if base_name == "opposing_brackets":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            paired_gravity = [[first, second] for first in gravities for second in gravities]
+            scale_steps = [[], [op["zoom2"]], [op["zoom3"]], [op["downsample2"]], [op["downsample2"], op["zoom2"]]]
+            color_steps = swaps + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette)]
+
+            for first in gravities:
+                for second in gravities:
+                    programs.append([op["downsample2"], op["zoom2"], first, second])
+            for scale in scale_steps:
+                for gravity_part in gravity_steps + paired_gravity:
+                    for turn in turns:
+                        programs.append(scale + gravity_part + turn)
+                        for color_part in color_steps:
+                            programs.append(scale + gravity_part + color_part + turn)
+            return programs
+
         if base_name == "linegrid_corners_center":
             turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
             removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {1, 2, 3, 5})]
@@ -5097,6 +5267,9 @@ class ARCSolver:
                 "edge_l_marker",
                 "vertical_five_run",
                 "column_down_fill",
+                "yellow_corner_rects",
+                "cross_yellow_ring",
+                "opposing_brackets",
                 "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",
@@ -5148,6 +5321,9 @@ class ARCSolver:
                 "edge_l_marker",
                 "vertical_five_run",
                 "column_down_fill",
+                "yellow_corner_rects",
+                "cross_yellow_ring",
+                "opposing_brackets",
                 "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",

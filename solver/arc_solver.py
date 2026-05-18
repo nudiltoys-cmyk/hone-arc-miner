@@ -2322,6 +2322,161 @@ def complete_opposing_bracket_arms(grid: Grid) -> Grid:
     return clone(grid)
 
 
+def sparse_colors_to_snake_grid(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 10 or w != 10:
+        return clone(grid)
+    pts = [(r, c, value) for r, row in enumerate(grid) for c, value in enumerate(row) if value != 0]
+    if not (6 <= len(pts) <= 9):
+        return clone(grid)
+    cols = [c for _, c, _ in pts]
+    if len(set(cols)) != len(cols):
+        return clone(grid)
+
+    out = [[0 for _ in range(3)] for _ in range(3)]
+    for idx, (_, _, value) in enumerate(sorted(pts, key=lambda item: item[1])):
+        out[idx // 3][idx % 3] = value
+    out[1] = out[1][::-1]
+    return out
+
+
+def sparse_grid_zoom2(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if not (2 <= h <= 5 and 2 <= w <= 5) or not any(value != 0 for row in grid for value in row):
+        return clone(grid)
+    return zoom(grid, 2)
+
+
+def fill_maze_component_by_parity(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 8 or w < 8 or 0 not in colors(grid):
+        return clone(grid)
+    counts = color_counts(grid)
+    nonzero = sorted(c for c in counts if c != 0)
+    if len(nonzero) < 3:
+        return clone(grid)
+    wall_color = max(nonzero, key=lambda c: counts[c])
+    seed_colors = [c for c in nonzero if c != wall_color]
+    if len(seed_colors) != 2 or counts[wall_color] < 8 or sum(counts[c] for c in seed_colors) > 8:
+        return clone(grid)
+
+    parity_color: dict[int, int] = {}
+    seeds: list[tuple[int, int]] = []
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value in seed_colors:
+                parity = (r + c) % 2
+                if parity in parity_color and parity_color[parity] != value:
+                    return clone(grid)
+                parity_color[parity] = value
+                seeds.append((r, c))
+    if set(parity_color) != {0, 1} or not seeds:
+        return clone(grid)
+
+    out = clone(grid)
+    queue = deque(seeds)
+    seen = set(seeds)
+    changed = False
+    while queue:
+        r, c = queue.popleft()
+        if not (0 <= r < h and 0 <= c < w) or grid[r][c] == wall_color:
+            continue
+        fill = parity_color[(r + c) % 2]
+        if out[r][c] != fill:
+            out[r][c] = fill
+            changed = True
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in seen and grid[nr][nc] != wall_color:
+                seen.add((nr, nc))
+                queue.append((nr, nc))
+    return out if changed else clone(grid)
+
+
+def fill_yellow_fountain_from_box(grid: Grid) -> Grid:
+    def canonical(candidate: Grid) -> Grid:
+        ch, cw = shape(candidate)
+        if ch != cw or ch < 5 or ch > 10:
+            return clone(candidate)
+        palette = nonzero_colors(candidate)
+        if len(palette) != 1:
+            return clone(candidate)
+        box_color = next(iter(palette))
+        pts = [(r, c) for r, row in enumerate(candidate) for c, value in enumerate(row) if value == box_color]
+        if not pts:
+            return clone(candidate)
+        r0, r1 = min(r for r, _ in pts), max(r for r, _ in pts)
+        c0, c1 = min(c for _, c in pts), max(c for _, c in pts)
+        if r1 - r0 < 2 or c1 - c0 < 4 or r1 not in {ch - 1, ch - 2}:
+            return clone(candidate)
+        if any(candidate[r0][c] != box_color for c in (c0, c1)):
+            return clone(candidate)
+        if any(candidate[r1][c] != box_color for c in range(c0, c1 + 1)):
+            return clone(candidate)
+        if any(candidate[r][c0] != box_color or candidate[r][c1] != box_color for r in range(r0, r1 + 1)):
+            return clone(candidate)
+        if any(candidate[r][c] not in {0, box_color} for r in range(ch) for c in range(cw)):
+            return clone(candidate)
+
+        out = clone(candidate)
+        for r in range(r0 + 1, r1):
+            for c in range(c0 + 1, c1):
+                out[r][c] = 4
+        for r in range(0, r1):
+            for c in range(c0 + 2, c1 - 1):
+                out[r][c] = 4
+        for r in range(0, r0):
+            left = c0 + 2 + r - r0
+            right = c1 - 2 + r0 - r
+            if 0 <= left < cw:
+                out[r][left] = 4
+            if 0 <= right < cw:
+                out[r][right] = 4
+        return out if out != candidate else clone(candidate)
+
+    orientations: list[tuple[Callable[[Grid], Grid], Callable[[Grid], Grid]]] = [
+        (clone, clone),
+        (flip_v, flip_v),
+        (transpose, transpose),
+        (lambda g: flip_v(transpose(g)), lambda g: transpose(flip_v(g))),
+    ]
+    for to_canonical, from_canonical in orientations:
+        candidate = to_canonical(grid)
+        solved = canonical(candidate)
+        if solved != candidate:
+            return from_canonical(solved)
+    return clone(grid)
+
+
+def project_edge_markers_to_cyan_pool(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 10 or w != 10 or 8 not in colors(grid):
+        return clone(grid)
+    cyan = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 8]
+    if not cyan:
+        return clone(grid)
+    r0, r1 = min(r for r, _ in cyan), max(r for r, _ in cyan)
+    c0, c1 = min(c for _, c in cyan), max(c for _, c in cyan)
+    if r0 != 3 or not (2 <= r1 - r0 + 1 <= 5) or not (2 <= c1 - c0 + 1 <= 4):
+        return clone(grid)
+    if any(grid[r][c] != 8 for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)):
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value in {0, 8}:
+                continue
+            target_r = min(max(r, r0), r1)
+            target_c = min(max(c, c0), c1)
+            if (target_r, target_c) == (r, c):
+                continue
+            if out[target_r][target_c] != value:
+                out[target_r][target_c] = value
+                changed = True
+    return out if changed else clone(grid)
+
+
 def fill_linegrid_corners_center(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != 10 or w != 10 or colors(grid) - {0, 5} or 5 not in colors(grid):
@@ -3764,6 +3919,19 @@ def targeted_base_candidate_ops(
         ops.append(Op("cross_yellow_ring", add_yellow_ring_to_cross_intersection))
     elif all(ex["input"] != complete_opposing_bracket_arms(ex["input"]) for ex in examples):
         ops.append(Op("opposing_brackets", complete_opposing_bracket_arms))
+    elif all(shape(ex["input"]) != shape(sparse_colors_to_snake_grid(ex["input"])) for ex in examples):
+        ops.append(Op("sparse_snake_colors", sparse_colors_to_snake_grid))
+    elif all(shape(ex["input"]) != shape(sparse_grid_zoom2(ex["input"])) for ex in examples) and not any(
+        shape(ex["output"]) == (shape(ex["input"])[0] * 3, shape(ex["input"])[1] * 3)
+        for ex in examples
+    ):
+        ops.append(Op("sparse_zoom2_base", sparse_grid_zoom2))
+    elif all(ex["input"] != fill_maze_component_by_parity(ex["input"]) for ex in examples):
+        ops.append(Op("maze_parity_fill", fill_maze_component_by_parity))
+    elif all(ex["input"] != fill_yellow_fountain_from_box(ex["input"]) for ex in examples):
+        ops.append(Op("yellow_fountain", fill_yellow_fountain_from_box))
+    elif all(ex["input"] != project_edge_markers_to_cyan_pool(ex["input"]) for ex in examples):
+        ops.append(Op("cyan_pool_projection", project_edge_markers_to_cyan_pool))
     elif all(ex["input"] != fill_linegrid_corners_center(ex["input"]) for ex in examples):
         ops.append(Op("linegrid_corners_center", fill_linegrid_corners_center))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
@@ -4535,6 +4703,65 @@ class ARCSolver:
                             programs.append(scale + gravity_part + color_part + turn)
             return programs
 
+        if base_name == "sparse_snake_colors":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette)]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            scale_steps = [[], [op["zoom2"]], [op["zoom3"]], [op["downsample2"]], [op["downsample2"], op["zoom2"]]]
+
+            for color in sorted(start_palette | output_palette | test_palette):
+                programs.append([op["zoom3"], remove_op(color), op["downsample2"], op["zoom3"], op["transpose"]])
+                programs.append([op["zoom3"], remove_op(color), op["downsample2"], op["zoom3"], op["anti_diag"]])
+                programs.append([op["zoom3"], remove_op(color), op["downsample2"], op["zoom3"], op["rot90"]])
+                programs.append([op["zoom3"], remove_op(color), op["downsample2"], op["zoom3"], op["rot270"]])
+            for scale in scale_steps:
+                for removal in removals:
+                    for gravity_part in gravity_steps:
+                        for turn in turns:
+                            programs.append(scale + removal + gravity_part + turn)
+                            programs.append(scale + gravity_part + removal + turn)
+            return programs
+
+        if base_name == "sparse_zoom2_base":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette)]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops]
+            scales = [[], [op["zoom2"]], [op["zoom3"]], [op["downsample2"]]]
+
+            for first_gravity in gravities:
+                for removal in removals:
+                    for second_gravity in gravities:
+                        for third_gravity in gravities:
+                            for shift_part in shift_steps:
+                                programs.append([first_gravity] + removal + [second_gravity, op["zoom3"], third_gravity] + shift_part)
+            for scale in scales:
+                for first_gravity in gravity_steps:
+                    for removal in removals:
+                        for turn in turns:
+                            programs.append(first_gravity + removal + scale + turn)
+                            programs.append(scale + first_gravity + removal + turn)
+            return programs
+
+        if base_name in {"maze_parity_fill", "yellow_fountain", "cyan_pool_projection"}:
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette)]
+            scale_steps = [[], [op["zoom2"]], [op["zoom3"]], [op["downsample2"]], [op["downsample2"], op["zoom2"]]]
+            for scale in scale_steps:
+                for turn in turns:
+                    programs.append(scale + turn)
+                    for removal in removals:
+                        programs.append(scale + removal + turn)
+                    for gravity_part in gravity_steps:
+                        programs.append(scale + gravity_part + turn)
+                        for removal in removals:
+                            programs.append(scale + gravity_part + removal + turn)
+                    for shift_part in shift_steps:
+                        programs.append(scale + shift_part + turn)
+            return programs
+
         if base_name == "linegrid_corners_center":
             turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
             removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {1, 2, 3, 5})]
@@ -5270,6 +5497,11 @@ class ARCSolver:
                 "yellow_corner_rects",
                 "cross_yellow_ring",
                 "opposing_brackets",
+                "sparse_snake_colors",
+                "sparse_zoom2_base",
+                "maze_parity_fill",
+                "yellow_fountain",
+                "cyan_pool_projection",
                 "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",
@@ -5324,6 +5556,11 @@ class ARCSolver:
                 "yellow_corner_rects",
                 "cross_yellow_ring",
                 "opposing_brackets",
+                "sparse_snake_colors",
+                "sparse_zoom2_base",
+                "maze_parity_fill",
+                "yellow_fountain",
+                "cyan_pool_projection",
                 "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",

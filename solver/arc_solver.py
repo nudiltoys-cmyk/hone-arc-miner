@@ -2176,6 +2176,56 @@ def restore_red_block_behind_cyan_strips(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def fill_linegrid_corners_center(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 10 or w != 10 or colors(grid) - {0, 5} or 5 not in colors(grid):
+        return clone(grid)
+
+    sep_rows = [r for r, row in enumerate(grid) if all(value == 5 for value in row)]
+    sep_cols = [c for c in range(w) if all(grid[r][c] == 5 for r in range(h))]
+    if len(sep_rows) not in {2, 4} or len(sep_cols) not in {2, 4}:
+        return clone(grid)
+    if any(row in {0, h - 1} for row in sep_rows) or any(col in {0, w - 1} for col in sep_cols):
+        return clone(grid)
+    if any(b <= a for a, b in zip(sep_rows, sep_rows[1:])) or any(
+        b <= a for a, b in zip(sep_cols, sep_cols[1:])
+    ):
+        return clone(grid)
+    for r in range(h):
+        for c in range(w):
+            on_sep = r in sep_rows or c in sep_cols
+            if on_sep and grid[r][c] != 5:
+                return clone(grid)
+            if not on_sep and grid[r][c] != 0:
+                return clone(grid)
+
+    def spans(seps: list[int], limit: int) -> list[tuple[int, int]]:
+        bounds = [-1] + seps + [limit]
+        return [(bounds[i] + 1, bounds[i + 1] - 1) for i in range(len(bounds) - 1)]
+
+    row_spans = spans(sep_rows, h)
+    col_spans = spans(sep_cols, w)
+    if len(row_spans) % 2 == 0 or len(col_spans) % 2 == 0:
+        return clone(grid)
+    if any(a > b for a, b in row_spans + col_spans):
+        return clone(grid)
+
+    out = clone(grid)
+    targets = [
+        (row_spans[0], col_spans[0], 1),
+        (row_spans[len(row_spans) // 2], col_spans[len(col_spans) // 2], 2),
+        (row_spans[-1], col_spans[-1], 3),
+    ]
+    changed = False
+    for (r0, r1), (c0, c1), color in targets:
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                if out[r][c] == 0:
+                    out[r][c] = color
+                    changed = True
+    return out if changed else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3562,6 +3612,8 @@ def targeted_base_candidate_ops(
         ex["input"] != extend_single_cells_down_columns(ex["input"]) for ex in examples
     ):
         ops.append(Op("column_down_fill", extend_single_cells_down_columns))
+    elif all(ex["input"] != fill_linegrid_corners_center(ex["input"]) for ex in examples):
+        ops.append(Op("linegrid_corners_center", fill_linegrid_corners_center))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
         ops.append(Op("repeated_half", extract_repeated_half))
     elif all(shape(ex["input"]) != shape(extract_repeated_outer_panel(ex["input"])) for ex in examples):
@@ -4313,6 +4365,22 @@ class ARCSolver:
                                     programs.append(first_gravity + shift_part + second_gravity + turn + swap + highlight)
             return programs
 
+        if base_name == "linegrid_corners_center":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {1, 2, 3, 5})]
+            scales = [[], [op["zoom3"]], [op["zoom2"]], [op["downsample2"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+
+            for color in sorted(start_palette | output_palette | test_palette | {1, 2, 3, 5}):
+                programs.append([op["zoom3"], remove_op(color), op["downsample2"], op["downsample2"]])
+            for scale in scales:
+                for removal in removals:
+                    for turn in turns:
+                        programs.append(scale + removal + turn)
+                        for gravity_part in gravity_steps:
+                            programs.append(scale + removal + gravity_part + turn)
+            return programs
+
         if base_name == "gray_component_size":
             turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
             gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
@@ -5029,6 +5097,7 @@ class ARCSolver:
                 "edge_l_marker",
                 "vertical_five_run",
                 "column_down_fill",
+                "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",
@@ -5079,6 +5148,7 @@ class ARCSolver:
                 "edge_l_marker",
                 "vertical_five_run",
                 "column_down_fill",
+                "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",
                 "noisy_box_crosses",

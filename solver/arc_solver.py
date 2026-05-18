@@ -2477,6 +2477,167 @@ def project_edge_markers_to_cyan_pool(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def mark_isolated_red_pixels_blue(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 3 or w < 3 or h > 12 or w > 12 or not nonzero_colors(grid) <= {2}:
+        return clone(grid)
+    out = clone(grid)
+    changed = False
+    for r in range(h):
+        for c in range(w):
+            if grid[r][c] != 2:
+                continue
+            neighbors = 0
+            for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+                if 0 <= nr < h and 0 <= nc < w and grid[nr][nc] != 0:
+                    neighbors += 1
+            if neighbors == 0:
+                out[r][c] = 1
+                changed = True
+    return out if changed else clone(grid)
+
+
+def summarize_gray_noisy_macro_blocks(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != w or h not in {4, 9, 16}:
+        return clone(grid)
+    block = int(h ** 0.5)
+    if block * block != h:
+        return clone(grid)
+    out = [[0 for _ in range(block)] for _ in range(block)]
+    changed = False
+    for br in range(block):
+        for bc in range(block):
+            counts: Counter[int] = Counter()
+            for r in range(br * block, (br + 1) * block):
+                for c in range(bc * block, (bc + 1) * block):
+                    value = grid[r][c]
+                    if value not in {0, 5}:
+                        counts[value] += 1
+            if not counts:
+                continue
+            color, count = counts.most_common(1)[0]
+            if count < block * block - 2:
+                return clone(grid)
+            out[br][bc] = color
+            changed = True
+    return out if changed else clone(grid)
+
+
+def fill_cyan_bridge_between_offset_blocks(grid: Grid) -> Grid:
+    def canonical(candidate: Grid) -> Grid:
+        ch, cw = shape(candidate)
+        if ch != 10 or cw != 10 or 8 in nonzero_colors(candidate):
+            return clone(candidate)
+        palette = sorted(nonzero_colors(candidate))
+        if len(palette) != 2:
+            return clone(candidate)
+        comps = connected_components(candidate)
+        if len(comps) != 2:
+            return clone(candidate)
+
+        rects: list[tuple[int, int, int, int, int]] = []
+        for comp in comps:
+            rect = _component_rect(comp)
+            if rect is None:
+                return clone(candidate)
+            r0, r1, c0, c1 = rect
+            color = candidate[comp[0][0]][comp[0][1]]
+            if r1 - r0 + 1 < 2 or c1 - c0 + 1 < 4:
+                return clone(candidate)
+            rects.append((r0, r1, c0, c1, color))
+        top, bottom = sorted(rects)
+        tr0, tr1, tc0, tc1, _ = top
+        br0, br1, bc0, bc1, _ = bottom
+        if tr1 >= br0 or tc1 - tc0 + 1 >= bc1 - bc0 + 1:
+            return clone(candidate)
+        if tc0 <= bc0 or tc1 > bc1 or br1 - br0 + 1 < 2:
+            return clone(candidate)
+        if br0 - tr1 < 2:
+            return clone(candidate)
+
+        out = clone(candidate)
+        changed = False
+        for r in range(tr1 + 1, br0):
+            for c in range(tc0 + 1, tc1):
+                if candidate[r][c] != 0:
+                    return clone(candidate)
+                out[r][c] = 8
+                changed = True
+        return out if changed else clone(candidate)
+
+    orientations: list[tuple[Callable[[Grid], Grid], Callable[[Grid], Grid]]] = [
+        (clone, clone),
+        (transpose, transpose),
+        (flip_v, flip_v),
+        (lambda g: flip_v(transpose(g)), lambda g: transpose(flip_v(g))),
+    ]
+    for to_canonical, from_canonical in orientations:
+        candidate = to_canonical(grid)
+        solved = canonical(candidate)
+        if solved != candidate:
+            return from_canonical(solved)
+    return clone(grid)
+
+
+def draw_red_paths_around_gray(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 10 or w != 10 or not nonzero_colors(grid) <= {2, 5}:
+        return clone(grid)
+    starts = [c for c, value in enumerate(grid[h - 1]) if value == 2]
+    if not starts or any(grid[r][c] == 2 for r in range(h - 1) for c in range(w)):
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for start in starts:
+        r, c = h - 1, start
+        out[r][c] = 2
+        while r > 0:
+            if grid[r - 1][c] == 5:
+                if c + 1 >= w:
+                    return clone(grid)
+                c += 1
+            else:
+                r -= 1
+            if out[r][c] != 2:
+                out[r][c] = 2
+                changed = True
+    return out if changed else clone(grid)
+
+
+def restore_pink_boxes_green_halo_yellow_holes(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h != 15 or w != 15 or not colors(grid) <= {6, 8} or 6 not in colors(grid):
+        return clone(grid)
+    out = clone(grid)
+    changed = False
+    comps = connected_components(replace_color(grid, 8, 0))
+    if not comps:
+        return clone(grid)
+    for comp in comps:
+        rows = [r for r, _ in comp]
+        cols = [c for _, c in comp]
+        r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+        if r0 == 0 or c0 == 0 or r1 >= h - 1 or c1 >= w - 1 or r1 - r0 < 1 or c1 - c0 < 1:
+            return clone(grid)
+        if any(grid[r][c] != 6 for c in range(c0, c1 + 1) for r in (r0, r1)):
+            return clone(grid)
+        if any(grid[r][c] != 6 for r in range(r0, r1 + 1) for c in (c0, c1)):
+            return clone(grid)
+        for r in range(r0 - 1, r1 + 2):
+            for c in range(c0 - 1, c1 + 2):
+                if r0 <= r <= r1 and c0 <= c <= c1:
+                    if grid[r][c] == 8:
+                        out[r][c] = 4
+                        changed = True
+                    continue
+                if out[r][c] == 8:
+                    out[r][c] = 3
+                    changed = True
+    return out if changed else clone(grid)
+
+
 def fill_linegrid_corners_center(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h != 10 or w != 10 or colors(grid) - {0, 5} or 5 not in colors(grid):
@@ -3932,6 +4093,16 @@ def targeted_base_candidate_ops(
         ops.append(Op("yellow_fountain", fill_yellow_fountain_from_box))
     elif all(ex["input"] != project_edge_markers_to_cyan_pool(ex["input"]) for ex in examples):
         ops.append(Op("cyan_pool_projection", project_edge_markers_to_cyan_pool))
+    elif all(ex["input"] != mark_isolated_red_pixels_blue(ex["input"]) for ex in examples):
+        ops.append(Op("isolated_red_to_blue", mark_isolated_red_pixels_blue))
+    elif all(shape(ex["input"]) != shape(summarize_gray_noisy_macro_blocks(ex["input"])) for ex in examples):
+        ops.append(Op("gray_noisy_macro_summary", summarize_gray_noisy_macro_blocks))
+    elif all(ex["input"] != fill_cyan_bridge_between_offset_blocks(ex["input"]) for ex in examples):
+        ops.append(Op("cyan_offset_bridge", fill_cyan_bridge_between_offset_blocks))
+    elif all(ex["input"] != draw_red_paths_around_gray(ex["input"]) for ex in examples):
+        ops.append(Op("red_paths_gray", draw_red_paths_around_gray))
+    elif all(ex["input"] != restore_pink_boxes_green_halo_yellow_holes(ex["input"]) for ex in examples):
+        ops.append(Op("pink_halo_yellow_holes", restore_pink_boxes_green_halo_yellow_holes))
     elif all(ex["input"] != fill_linegrid_corners_center(ex["input"]) for ex in examples):
         ops.append(Op("linegrid_corners_center", fill_linegrid_corners_center))
     elif all(shape(ex["input"]) != shape(extract_repeated_half(ex["input"])) for ex in examples):
@@ -4762,6 +4933,56 @@ class ARCSolver:
                         programs.append(scale + shift_part + turn)
             return programs
 
+        if base_name == "isolated_red_to_blue":
+            for swap in swaps:
+                programs.append([op["transpose"], op["recenter"], op["transpose"], op["zoom3"], op["grav_up"]] + swap)
+                programs.append([op["zoom3"], op["grav_up"]] + swap)
+            return programs
+
+        if base_name == "gray_noisy_macro_summary":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            for shift_op in shift_ops:
+                programs.append([op["grav_down"], shift_op, op["zoom3"], op["zoom3"], op["grav_down"], op["downsample2"], op["rot270"]])
+            for first_gravity in gravities:
+                for shift_op in shift_ops:
+                    for second_gravity in gravities:
+                        for turn in turns:
+                            programs.append([first_gravity, shift_op, op["zoom3"], op["zoom3"], second_gravity, op["downsample2"]] + turn)
+            return programs
+
+        if base_name == "cyan_offset_bridge":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            for gravity_op in gravities:
+                programs.append([gravity_op, op["zoom2"], op["transpose"], op["recenter"]])
+                for turn in turns:
+                    programs.append([gravity_op, op["zoom2"]] + turn + [op["recenter"]])
+            return programs
+
+        if base_name == "red_paths_gray":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            for gravity_op in gravities:
+                programs.append([gravity_op, op["rot180"], op["recenter"], op["zoom3"]])
+                for turn in turns:
+                    programs.append([gravity_op] + turn + [op["recenter"], op["zoom3"]])
+                    programs.append([gravity_op] + turn + [op["zoom3"]])
+            return programs
+
+        if base_name == "pink_halo_yellow_holes":
+            color_pool = sorted(start_palette | output_palette | test_palette | {3, 4, 6, 8})
+            swap_steps = [[swap_op(a, b)] for a, b in combinations(color_pool, 2)]
+            removal_steps = [[remove_op(c)] for c in color_pool]
+            for first_swap in swap_steps:
+                for removal in removal_steps:
+                    for second_swap in swap_steps:
+                        programs.append(
+                            [op["rot270"], op["grav_down"], op["recenter"]]
+                            + first_swap
+                            + removal
+                            + [op["grav_down"]]
+                            + second_swap
+                        )
+            return programs
+
         if base_name == "linegrid_corners_center":
             turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
             removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {1, 2, 3, 5})]
@@ -5502,6 +5723,11 @@ class ARCSolver:
                 "maze_parity_fill",
                 "yellow_fountain",
                 "cyan_pool_projection",
+                "isolated_red_to_blue",
+                "gray_noisy_macro_summary",
+                "cyan_offset_bridge",
+                "red_paths_gray",
+                "pink_halo_yellow_holes",
                 "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",
@@ -5561,6 +5787,11 @@ class ARCSolver:
                 "maze_parity_fill",
                 "yellow_fountain",
                 "cyan_pool_projection",
+                "isolated_red_to_blue",
+                "gray_noisy_macro_summary",
+                "cyan_offset_bridge",
+                "red_paths_gray",
+                "pink_halo_yellow_holes",
                 "linegrid_corners_center",
                 "repeated_half",
                 "repeated_outer_panel",

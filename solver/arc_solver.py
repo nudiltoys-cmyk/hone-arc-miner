@@ -1981,6 +1981,69 @@ def mark_pattern_matches_with_blue_boxes(grid: Grid) -> Grid:
     return out if out != grid else clone(grid)
 
 
+def project_red_points_to_cyan_guides(grid: Grid) -> Grid:
+    def solve_horizontal(src: Grid) -> Grid | None:
+        h, w = shape(src)
+        guide_rows = [r for r, row in enumerate(src) if all(value == 8 for value in row)]
+        if not guide_rows or len(guide_rows) > 2:
+            return None
+        if any(row in {0, h - 1} for row in guide_rows):
+            return None
+        red_points = [
+            (r, c)
+            for r, row in enumerate(src)
+            for c, value in enumerate(row)
+            if value == 2
+        ]
+        if not red_points:
+            return None
+        if any(r in guide_rows or c in {0, w - 1} for r, c in red_points):
+            return None
+        if any(value not in {0, 2, 8} for row in src for value in row):
+            return None
+        cyan_cells = {(r, c) for r, row in enumerate(src) for c, value in enumerate(row) if value == 8}
+        if cyan_cells != {(r, c) for r in guide_rows for c in range(w)}:
+            return None
+
+        out = [[0 for _ in range(w)] for _ in range(h)]
+        for line in guide_rows:
+            for c in range(w):
+                out[line][c] = 8
+
+        for row, col in sorted(red_points, key=lambda pt: (pt[1], pt[0])):
+            for line in guide_rows:
+                r = row
+                step = -1 if line < row else 1
+                while r != line:
+                    if out[r][col] == 8:
+                        break
+                    out[r][col] = 2
+                    r += step
+                if r == line:
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            nr, nc = r + dr, col + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                out[nr][nc] = 8
+                    out[r][col] = 2
+        return out
+
+    if not ({2, 8} <= colors(grid)):
+        return clone(grid)
+
+    direct = solve_horizontal(grid)
+    if direct is not None and direct != grid:
+        return direct
+
+    transposed = transpose(grid)
+    solved = solve_horizontal(transposed)
+    if solved is not None:
+        out = transpose(solved)
+        if out != grid:
+            return out
+    return clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3389,6 +3452,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("repeated_marker_sprites", complete_repeated_marker_sprites))
     elif all(ex["input"] != mark_pattern_matches_with_blue_boxes(ex["input"]) for ex in examples):
         ops.append(Op("pattern_match_boxes", mark_pattern_matches_with_blue_boxes))
+    elif all(ex["input"] != project_red_points_to_cyan_guides(ex["input"]) for ex in examples):
+        ops.append(Op("cyan_projection", project_red_points_to_cyan_guides))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -4042,6 +4107,26 @@ class ARCSolver:
                             programs.append(gravity_part + highlight + turn + center)
                             programs.append(gravity_part + turn + highlight + center)
                             programs.append(turn + gravity_part + highlight + center)
+            return programs
+
+        if base_name == "cyan_projection":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops]
+            highlights = [[]] + [[keep_op(c)] for c in sorted(start_palette | output_palette | test_palette | {2, 8})]
+            removals = [[]] + [[remove_op(c)] for c in sorted(start_palette | output_palette | test_palette | {2, 8})]
+            scales = [[], [op["downsample2"]], [op["zoom2"]]]
+
+            for turn in turns:
+                for gravity_part in gravity_steps:
+                    for highlight in highlights:
+                        for shift_part in shift_steps:
+                            programs.append(gravity_part + highlight + shift_part + turn)
+                            programs.append(turn + gravity_part + highlight + shift_part)
+                for removal in removals:
+                    for scale in scales:
+                        for final_turn in turns:
+                            programs.append(turn + removal + scale + final_turn)
             return programs
 
         if base_name == "gray_component_size":
@@ -4778,6 +4863,7 @@ class ARCSolver:
                 "hidden_cyan_crosses",
                 "repeated_marker_sprites",
                 "pattern_match_boxes",
+                "cyan_projection",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4824,6 +4910,7 @@ class ARCSolver:
                 "hidden_cyan_crosses",
                 "repeated_marker_sprites",
                 "pattern_match_boxes",
+                "cyan_projection",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

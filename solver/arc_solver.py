@@ -1898,6 +1898,89 @@ def complete_repeated_marker_sprites(grid: Grid) -> Grid:
     return out if changed else clone(grid)
 
 
+def mark_pattern_matches_with_blue_boxes(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if h < 8 or w < 8 or not ({1, 4} <= colors(grid)):
+        return clone(grid)
+
+    blue_comps = [comp for comp in connected_components(grid) if grid[comp[0][0]][comp[0][1]] == 1]
+    if len(blue_comps) != 1:
+        return clone(grid)
+
+    comp = blue_comps[0]
+    rows = [r for r, _ in comp]
+    cols = [c for _, c in comp]
+    r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+    box_h, box_w = r1 - r0 + 1, c1 - c0 + 1
+    if box_h < 3 or box_w < 3 or box_h > 5 or box_w > 5:
+        return clone(grid)
+
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            on_border = r in {r0, r1} or c in {c0, c1}
+            if on_border and grid[r][c] != 1:
+                return clone(grid)
+            if not on_border and grid[r][c] not in {1, 4}:
+                return clone(grid)
+
+    pattern = [
+        [4 if grid[r][c] == 4 else 0 for c in range(c0 + 1, c1)]
+        for r in range(r0 + 1, r1)
+    ]
+    if not pattern or not pattern[0] or sum(value == 4 for row in pattern for value in row) < 2:
+        return clone(grid)
+
+    variants: list[Grid] = []
+    seen_variants: set[tuple[tuple[int, ...], ...]] = set()
+    for rotate in range(4):
+        variant = clone(pattern)
+        for _ in range(rotate):
+            variant = rotate90(variant)
+        for xposed in (False, True):
+            candidate = transpose(variant) if xposed else variant
+            key = freeze(candidate)
+            if key not in seen_variants:
+                seen_variants.add(key)
+                variants.append(candidate)
+
+    matches: set[tuple[int, int, int, int]] = set()
+    for variant in variants:
+        vh, vw = shape(variant)
+        if vh == 0 or vw == 0 or vh > h or vw > w:
+            continue
+        for top in range(h - vh + 1):
+            for left in range(w - vw + 1):
+                ok = True
+                for rr in range(vh):
+                    for cc in range(vw):
+                        actual = grid[top + rr][left + cc]
+                        if actual == 1:
+                            actual = 0
+                        if actual != variant[rr][cc]:
+                            ok = False
+                            break
+                    if not ok:
+                        break
+                if ok:
+                    matches.add((top, left, vh, vw))
+
+    if not matches:
+        return clone(grid)
+
+    out = [[0 for _ in range(w)] for _ in range(h)]
+    for top, left, mh, mw in matches:
+        for r in range(top - 1, top + mh + 1):
+            for c in range(left - 1, left + mw + 1):
+                if 0 <= r < h and 0 <= c < w:
+                    out[r][c] = 1
+    for r, row in enumerate(grid):
+        for c, value in enumerate(row):
+            if value == 4:
+                out[r][c] = 4
+
+    return out if out != grid else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3304,6 +3387,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("hidden_cyan_crosses", restore_hidden_cyan_crosses))
     elif all(ex["input"] != complete_repeated_marker_sprites(ex["input"]) for ex in examples):
         ops.append(Op("repeated_marker_sprites", complete_repeated_marker_sprites))
+    elif all(ex["input"] != mark_pattern_matches_with_blue_boxes(ex["input"]) for ex in examples):
+        ops.append(Op("pattern_match_boxes", mark_pattern_matches_with_blue_boxes))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -3940,6 +4025,23 @@ class ARCSolver:
                 for shift_part in shift_steps:
                     programs.append(turn + shift_part)
                     programs.append(shift_part + turn)
+            return programs
+
+        if base_name == "pattern_match_boxes":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            highlights = [[]] + [[keep_op(c)] for c in sorted(start_palette | output_palette | test_palette | {1, 4})]
+            centers = [[], [op["recenter"]]]
+
+            programs.append([op["grav_right"], keep_op(4), op["rot270"], op["recenter"]])
+            programs.append([op["grav_right"], keep_op(1), op["rot270"], op["recenter"]])
+            for gravity_part in gravity_steps:
+                for highlight in highlights:
+                    for turn in turns:
+                        for center in centers:
+                            programs.append(gravity_part + highlight + turn + center)
+                            programs.append(gravity_part + turn + highlight + center)
+                            programs.append(turn + gravity_part + highlight + center)
             return programs
 
         if base_name == "gray_component_size":
@@ -4675,6 +4777,7 @@ class ARCSolver:
                 "blue_frame_crosshairs",
                 "hidden_cyan_crosses",
                 "repeated_marker_sprites",
+                "pattern_match_boxes",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4720,6 +4823,7 @@ class ARCSolver:
                 "blue_frame_crosshairs",
                 "hidden_cyan_crosses",
                 "repeated_marker_sprites",
+                "pattern_match_boxes",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

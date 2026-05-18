@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/nudiltoys-cmyk/hone-arc-miner"
 REPO_BRANCH="main"
-SOLVER_COMMIT="497e1ec40a318e988ef5f0918a50518c35e5259c"
+SOLVER_COMMIT="eba58b9064da4a90207d537ca5377c9b44e8e4d4"
 HOTKEY="5Cvvp52bNd4MLiTzhkEDt5NTGL89xWvMvP8maswDCwVuvqBb"
 PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPDQP4NaSwmHjQ5td01U4QsPhlBVRi3x8R07lVX5DStX hone-sn5-vps"
 
@@ -56,7 +56,7 @@ Environment=MINER_REPO_PATH=solver
 Environment=MINER_WEIGHT_CLASS=1xH200
 Environment=MINER_USE_VLLM=false
 Environment=MINER_HOTKEY_SS58=$HOTKEY
-Environment=MINER_VERSION=497e1ec
+Environment=MINER_VERSION=eba58b9
 ExecStart=/opt/hone-miner-venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8091
 Restart=always
 RestartSec=5

@@ -2140,6 +2140,42 @@ def fill_gray_box_holes_from_sprites(grid: Grid) -> Grid:
     return out if out != grid else clone(grid)
 
 
+def restore_red_block_behind_cyan_strips(grid: Grid) -> Grid:
+    if colors(grid) - {0, 8}:
+        return clone(grid)
+    pts = [(r, c) for r, row in enumerate(grid) for c, value in enumerate(row) if value == 8]
+    if not pts:
+        return clone(grid)
+
+    comps = connected_components(grid)
+    if len(comps) != 1:
+        return clone(grid)
+    r0, r1, c0, c1 = bbox(grid) or (0, -1, 0, -1)
+    box_h, box_w = r1 - r0 + 1, c1 - c0 + 1
+    small, large = sorted((box_h, box_w))
+    if not (2 <= small <= 6 and 5 <= large <= 9):
+        return clone(grid)
+    if any(
+        all(grid[r][c] == 0 for c in range(c0, c1 + 1))
+        for r in range(r0, r1 + 1)
+    ):
+        return clone(grid)
+    if any(
+        all(grid[r][c] == 0 for r in range(r0, r1 + 1))
+        for c in range(c0, c1 + 1)
+    ):
+        return clone(grid)
+
+    out = clone(grid)
+    changed = False
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            if out[r][c] == 0:
+                out[r][c] = 2
+                changed = True
+    return out if changed else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3552,6 +3588,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("cyan_projection", project_red_points_to_cyan_guides))
     elif all(ex["input"] != fill_gray_box_holes_from_sprites(ex["input"]) for ex in examples):
         ops.append(Op("gray_hole_sprites", fill_gray_box_holes_from_sprites))
+    elif all(ex["input"] != restore_red_block_behind_cyan_strips(ex["input"]) for ex in examples):
+        ops.append(Op("cyan_strip_red_block", restore_red_block_behind_cyan_strips))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -4250,6 +4288,29 @@ class ARCSolver:
                     for highlight in highlights:
                         programs.append(turn + gravity_part + highlight)
                         programs.append(gravity_part + turn + highlight)
+            return programs
+
+        if base_name == "cyan_strip_red_block":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            shift_steps = [[]] + [[shift_op] for shift_op in shift_ops]
+            highlights = [[]] + [[keep_op(c)] for c in sorted(start_palette | output_palette | test_palette | {2, 8})]
+            swaps_for_colors = [[]]
+            for a, b in combinations(sorted(start_palette | output_palette | test_palette | {2, 8}), 2):
+                swaps_for_colors.append([swap_op(a, b)])
+                swaps_for_colors.append([swap_gen_op(a, b)])
+
+            programs.append([op["grav_left"], Op("shift_left_1", lambda g: shift(g, "left", 1)), op["grav_right"], op["anti_diag"], op["recenter"]])
+            programs.append([op["grav_left"], Op("shift_left_2", lambda g: shift(g, "left", 2)), op["grav_right"], op["anti_diag"], op["recenter"]])
+            programs.append([op["grav_left"], Op("shift_left_3", lambda g: shift(g, "left", 3)), op["grav_right"], op["anti_diag"], op["recenter"]])
+            for first_gravity in gravity_steps:
+                for shift_part in shift_steps:
+                    for second_gravity in gravity_steps:
+                        for swap in swaps_for_colors:
+                            for turn in turns:
+                                for highlight in highlights:
+                                    programs.append(first_gravity + shift_part + second_gravity + swap + turn + highlight)
+                                    programs.append(first_gravity + shift_part + second_gravity + turn + swap + highlight)
             return programs
 
         if base_name == "gray_component_size":
@@ -4988,6 +5049,7 @@ class ARCSolver:
                 "pattern_match_boxes",
                 "cyan_projection",
                 "gray_hole_sprites",
+                "cyan_strip_red_block",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -5036,6 +5098,7 @@ class ARCSolver:
                 "pattern_match_boxes",
                 "cyan_projection",
                 "gray_hole_sprites",
+                "cyan_strip_red_block",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",

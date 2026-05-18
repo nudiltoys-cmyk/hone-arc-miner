@@ -2044,6 +2044,102 @@ def project_red_points_to_cyan_guides(grid: Grid) -> Grid:
     return clone(grid)
 
 
+def fill_gray_box_holes_from_sprites(grid: Grid) -> Grid:
+    h, w = shape(grid)
+    if shape(grid) != (10, 10) or 5 not in colors(grid):
+        return clone(grid)
+
+    gray_mask = [[5 if value == 5 else 0 for value in row] for row in grid]
+    rects: list[tuple[int, int, int, int, frozenset[tuple[int, int]]]] = []
+    for comp in connected_components(gray_mask):
+        rows = [r for r, _ in comp]
+        cols = [c for _, c in comp]
+        r0, r1, c0, c1 = min(rows), max(rows), min(cols), max(cols)
+        if r1 - r0 + 1 < 3 or c1 - c0 + 1 < 3:
+            continue
+        ok = True
+        holes: set[tuple[int, int]] = set()
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
+                on_border = r in {r0, r1} or c in {c0, c1}
+                value = grid[r][c]
+                if on_border and value != 5:
+                    ok = False
+                    break
+                if not on_border:
+                    if value == 0:
+                        holes.add((r - r0 - 1, c - c0 - 1))
+                    elif value != 5:
+                        ok = False
+                        break
+            if not ok:
+                break
+        if ok and len(holes) >= 2:
+            rects.append((r0, r1, c0, c1, frozenset(holes)))
+
+    if len(rects) < 2:
+        return clone(grid)
+
+    occupied_rect_cells = {
+        (r, c)
+        for r0, r1, c0, c1, _ in rects
+        for r in range(r0, r1 + 1)
+        for c in range(c0, c1 + 1)
+    }
+
+    raw_components = connected_components(grid)
+    component_counts_by_color = Counter(
+        grid[comp[0][0]][comp[0][1]]
+        for comp in raw_components
+        if grid[comp[0][0]][comp[0][1]] not in {0, 5}
+    )
+
+    sprite_components: list[tuple[int, frozenset[tuple[int, int]], frozenset[tuple[int, int]]]] = []
+    for comp in raw_components:
+        color = grid[comp[0][0]][comp[0][1]]
+        if color in {0, 5} or any(cell in occupied_rect_cells for cell in comp):
+            continue
+        if component_counts_by_color[color] != 1:
+            continue
+        if len(comp) < 2:
+            continue
+        min_r = min(r for r, _ in comp)
+        min_c = min(c for _, c in comp)
+        norm = frozenset((r - min_r, c - min_c) for r, c in comp)
+        sprite_components.append((color, norm, frozenset(comp)))
+
+    if len(sprite_components) < len(rects):
+        return clone(grid)
+
+    assignments: list[tuple[tuple[int, int, int, int, frozenset[tuple[int, int]]], int, frozenset[tuple[int, int]]]] = []
+    used: set[frozenset[tuple[int, int]]] = set()
+    for rect in rects:
+        r0, r1, c0, c1, holes = rect
+        min_r = min(r for r, _ in holes)
+        min_c = min(c for _, c in holes)
+        hole_shape = frozenset((r - min_r, c - min_c) for r, c in holes)
+        matches = [
+            (color, cells)
+            for color, norm, cells in sprite_components
+            if cells not in used and norm == hole_shape and len(cells) == len(holes)
+        ]
+        if len(matches) != 1:
+            return clone(grid)
+        color, cells = matches[0]
+        used.add(cells)
+        assignments.append((rect, color, cells))
+
+    out = clone(grid)
+    for _, _, cells in assignments:
+        for r, c in cells:
+            out[r][c] = 0
+    for (r0, _, c0, _, holes), color, _ in assignments:
+        for dr, dc in holes:
+            out[r0 + 1 + dr][c0 + 1 + dc] = color
+
+    return out if out != grid else clone(grid)
+
+
 def fill_blue_zero_holes(grid: Grid) -> Grid:
     h, w = shape(grid)
     if h < 8 or w < 8 or h != w or 0 not in colors(grid):
@@ -3454,6 +3550,8 @@ def targeted_base_candidate_ops(
         ops.append(Op("pattern_match_boxes", mark_pattern_matches_with_blue_boxes))
     elif all(ex["input"] != project_red_points_to_cyan_guides(ex["input"]) for ex in examples):
         ops.append(Op("cyan_projection", project_red_points_to_cyan_guides))
+    elif all(ex["input"] != fill_gray_box_holes_from_sprites(ex["input"]) for ex in examples):
+        ops.append(Op("gray_hole_sprites", fill_gray_box_holes_from_sprites))
     elif all(ex["input"] != complete_blast_radius(ex["input"]) for ex in examples):
         ops.append(Op("blast_radius", complete_blast_radius))
     elif all(ex["input"] != project_origin_shape_across_linegrid(ex["input"]) for ex in examples):
@@ -4127,6 +4225,31 @@ class ARCSolver:
                     for scale in scales:
                         for final_turn in turns:
                             programs.append(turn + removal + scale + final_turn)
+            return programs
+
+        if base_name == "gray_hole_sprites":
+            turns = [[], [op["rot90"]], [op["rot180"]], [op["rot270"]], [op["transpose"]], [op["anti_diag"]]]
+            gravity_steps = [[]] + [[gravity_op] for gravity_op in gravities]
+            highlights = [[]] + [[keep_op(c)] for c in sorted(start_palette | output_palette | test_palette | {2, 5})]
+            color_pairs = list(combinations(sorted(start_palette | output_palette | test_palette | {2, 5}), 2))
+            swap_steps = [[]]
+            for a, b in color_pairs:
+                swap_steps.append([swap_op(a, b)])
+                swap_steps.append([swap_gen_op(a, b)])
+
+            for highlight in highlights:
+                programs.append([op["anti_diag"], op["grav_up"], op["rot180"], op["grav_down"], op["grav_down"]] + highlight)
+            for first_gravity in gravity_steps:
+                for second_gravity in gravity_steps:
+                    for swap in swap_steps:
+                        for third_gravity in gravity_steps:
+                            for turn in turns:
+                                programs.append(first_gravity + second_gravity + swap + third_gravity + turn)
+            for turn in turns:
+                for gravity_part in gravity_steps:
+                    for highlight in highlights:
+                        programs.append(turn + gravity_part + highlight)
+                        programs.append(gravity_part + turn + highlight)
             return programs
 
         if base_name == "gray_component_size":
@@ -4864,6 +4987,7 @@ class ARCSolver:
                 "repeated_marker_sprites",
                 "pattern_match_boxes",
                 "cyan_projection",
+                "gray_hole_sprites",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
@@ -4911,6 +5035,7 @@ class ARCSolver:
                 "repeated_marker_sprites",
                 "pattern_match_boxes",
                 "cyan_projection",
+                "gray_hole_sprites",
                 "blast_radius",
                 "gray_component_size",
                 "origin_linegrid_shape",
